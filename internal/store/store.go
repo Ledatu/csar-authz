@@ -63,6 +63,12 @@ type Store interface {
 	// GetSubjectRoles returns all directly assigned role names for a subject.
 	GetSubjectRoles(ctx context.Context, subject string) ([]string, error)
 
+	// --- Bulk Operations ---
+
+	// Sync atomically replaces all roles, permissions, and assignments.
+	// Used by config-driven policy loading and hot-reload.
+	Sync(ctx context.Context, roles []*Role, perms []*Permission, assignments map[string][]string) error
+
 	// --- Permissions ---
 
 	// AddPermission adds a permission to a role. Returns ErrNotFound if the role doesn't exist.

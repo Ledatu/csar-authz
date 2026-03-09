@@ -244,6 +244,119 @@ func TestRemovePermissionNotFound(t *testing.T) {
 	}
 }
 
+func TestSync_Basic(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{
+		{Name: "viewer", Description: "Read-only"},
+		{Name: "admin", Description: "Full access", Parents: []string{"viewer"}},
+	}
+	perms := []*store.Permission{
+		{Role: "viewer", Resource: "/api/**", Action: "GET"},
+		{Role: "admin", Resource: "/**", Action: "*"},
+	}
+	assignments := map[string][]string{
+		"alice": {"admin"},
+		"bob":   {"viewer"},
+	}
+
+	if err := s.Sync(ctx, roles, perms, assignments); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// Verify roles.
+	allRoles, _ := s.ListRoles(ctx)
+	if len(allRoles) != 2 {
+		t.Fatalf("roles = %d, want 2", len(allRoles))
+	}
+
+	// Verify permissions.
+	viewerPerms, _ := s.GetRolePermissions(ctx, "viewer")
+	if len(viewerPerms) != 1 {
+		t.Fatalf("viewer perms = %d, want 1", len(viewerPerms))
+	}
+
+	// Verify assignments.
+	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice")
+	if len(aliceRoles) != 1 || aliceRoles[0] != "admin" {
+		t.Fatalf("alice roles = %v, want [admin]", aliceRoles)
+	}
+}
+
+func TestSync_ReplacesExisting(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	// Initial state.
+	_ = s.CreateRole(ctx, &store.Role{Name: "old"})
+	_ = s.AssignRole(ctx, "user", "old")
+
+	// Sync replaces everything.
+	roles := []*store.Role{{Name: "new"}}
+	perms := []*store.Permission{{Role: "new", Resource: "/**", Action: "*"}}
+	assignments := map[string][]string{"user": {"new"}}
+
+	if err := s.Sync(ctx, roles, perms, assignments); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// Old role should be gone.
+	_, err := s.GetRole(ctx, "old")
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatal("old role should not exist after sync")
+	}
+
+	// New role should exist.
+	r, err := s.GetRole(ctx, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Name != "new" {
+		t.Fatalf("role name = %q, want new", r.Name)
+	}
+}
+
+func TestSync_InvalidParent(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{
+		{Name: "child", Parents: []string{"nonexistent"}},
+	}
+
+	err := s.Sync(ctx, roles, nil, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid parent")
+	}
+}
+
+func TestSync_InvalidPermissionRole(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{{Name: "admin"}}
+	perms := []*store.Permission{{Role: "nonexistent", Resource: "/**", Action: "*"}}
+
+	err := s.Sync(ctx, roles, perms, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid permission role")
+	}
+}
+
+func TestSync_InvalidAssignmentRole(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{{Name: "admin"}}
+	assignments := map[string][]string{"user": {"nonexistent"}}
+
+	err := s.Sync(ctx, roles, nil, assignments)
+	if err == nil {
+		t.Fatal("expected error for invalid assignment role")
+	}
+}
+
 func TestDeleteRoleCleansParentReferences(t *testing.T) {
 	s := New()
 	ctx := context.Background()

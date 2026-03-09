@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ledatu/csar-core/grpcjwt"
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
 	pb "github.com/ledatu/csar-authz/proto/authz/v1"
@@ -26,7 +27,14 @@ func New(e *engine.Engine) *Server {
 // ─── Access Check ───────────────────────────────────────────────────────────
 
 // CheckAccess evaluates whether a subject can perform an action on a resource.
+// If Subject is empty in the request, it falls back to the JWT-extracted
+// subject from the context (set by the authn interceptor).
 func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*pb.CheckAccessResponse, error) {
+	if req.Subject == "" {
+		if sub, ok := grpcjwt.SubjectFromContext(ctx); ok {
+			req.Subject = sub
+		}
+	}
 	if req.Subject == "" {
 		return nil, status.Error(codes.InvalidArgument, "subject is required")
 	}

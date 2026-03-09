@@ -48,6 +48,63 @@ func New() *Store {
 	}
 }
 
+// Sync atomically replaces all roles, permissions, and assignments.
+func (s *Store) Sync(_ context.Context, roles []*store.Role, perms []*store.Permission, assignments map[string][]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Clear all state.
+	s.roles = make(map[string]*store.Role, len(roles))
+	s.assignments = make(map[string]map[string]struct{})
+	s.permissions = make(map[string][]*store.Permission)
+	s.permByID = make(map[string]*store.Permission)
+
+	// Insert roles (caller ensures parents come before children).
+	for _, r := range roles {
+		for _, parent := range r.Parents {
+			if _, ok := s.roles[parent]; !ok {
+				return fmt.Errorf("parent role %q: %w", parent, store.ErrNotFound)
+			}
+		}
+		cp := *r
+		parents := make([]string, len(r.Parents))
+		copy(parents, r.Parents)
+		cp.Parents = parents
+		if cp.CreatedAt.IsZero() {
+			cp.CreatedAt = time.Now()
+		}
+		s.roles[cp.Name] = &cp
+	}
+
+	// Insert permissions.
+	for _, p := range perms {
+		if _, ok := s.roles[p.Role]; !ok {
+			return fmt.Errorf("permission role %q: %w", p.Role, store.ErrNotFound)
+		}
+		cp := *p
+		if cp.ID == "" {
+			cp.ID = nextPermID()
+		}
+		s.permissions[cp.Role] = append(s.permissions[cp.Role], &cp)
+		s.permByID[cp.ID] = &cp
+	}
+
+	// Insert assignments.
+	for subject, roleNames := range assignments {
+		for _, roleName := range roleNames {
+			if _, ok := s.roles[roleName]; !ok {
+				return fmt.Errorf("assignment role %q for subject %q: %w", roleName, subject, store.ErrNotFound)
+			}
+			if s.assignments[subject] == nil {
+				s.assignments[subject] = make(map[string]struct{})
+			}
+			s.assignments[subject][roleName] = struct{}{}
+		}
+	}
+
+	return nil
+}
+
 // CreateRole inserts a new role.
 func (s *Store) CreateRole(_ context.Context, role *store.Role) error {
 	s.mu.Lock()
