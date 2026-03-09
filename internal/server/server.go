@@ -1,0 +1,267 @@
+// Package server implements the AuthzService gRPC server.
+package server
+
+import (
+	"context"
+	"errors"
+
+	"github.com/ledatu/csar-authz/internal/engine"
+	"github.com/ledatu/csar-authz/internal/store"
+	pb "github.com/ledatu/csar-authz/proto/authz/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// Server implements the AuthzServiceServer gRPC interface.
+type Server struct {
+	pb.UnimplementedAuthzServiceServer
+	engine *engine.Engine
+}
+
+// New creates a new gRPC server backed by the given engine.
+func New(e *engine.Engine) *Server {
+	return &Server{engine: e}
+}
+
+// ─── Access Check ───────────────────────────────────────────────────────────
+
+// CheckAccess evaluates whether a subject can perform an action on a resource.
+func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*pb.CheckAccessResponse, error) {
+	if req.Subject == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject is required")
+	}
+	if req.Resource == "" {
+		return nil, status.Error(codes.InvalidArgument, "resource is required")
+	}
+	if req.Action == "" {
+		return nil, status.Error(codes.InvalidArgument, "action is required")
+	}
+
+	result, err := s.engine.CheckAccess(ctx, req.Subject, req.Resource, req.Action)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "authorization check failed: %v", err)
+	}
+
+	return &pb.CheckAccessResponse{
+		Allowed:         result.Allowed,
+		MatchedRoles:    result.MatchedRoles,
+		EnrichedHeaders: engine.EnrichedHeaders(result),
+	}, nil
+}
+
+// ─── Role Management ────────────────────────────────────────────────────────
+
+// CreateRole creates a new role.
+func (s *Server) CreateRole(ctx context.Context, req *pb.CreateRoleRequest) (*pb.CreateRoleResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	role := &store.Role{
+		Name:        req.Name,
+		Description: req.Description,
+		Parents:     req.Parents,
+	}
+
+	if err := s.engine.CreateRole(ctx, role); err != nil {
+		if errors.Is(err, store.ErrAlreadyExists) {
+			return nil, status.Errorf(codes.AlreadyExists, "role %q already exists", req.Name)
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "parent role: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "creating role: %v", err)
+	}
+
+	return &pb.CreateRoleResponse{
+		Role: roleToProto(role),
+	}, nil
+}
+
+// DeleteRole removes a role.
+func (s *Server) DeleteRole(ctx context.Context, req *pb.DeleteRoleRequest) (*pb.DeleteRoleResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	if err := s.engine.DeleteRole(ctx, req.Name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "deleting role: %v", err)
+	}
+
+	return &pb.DeleteRoleResponse{}, nil
+}
+
+// GetRole returns a single role.
+func (s *Server) GetRole(ctx context.Context, req *pb.GetRoleRequest) (*pb.GetRoleResponse, error) {
+	if req.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	role, err := s.engine.GetRole(ctx, req.Name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Name)
+		}
+		return nil, status.Errorf(codes.Internal, "getting role: %v", err)
+	}
+
+	return &pb.GetRoleResponse{
+		Role: roleToProto(role),
+	}, nil
+}
+
+// ListRoles returns all defined roles.
+func (s *Server) ListRoles(ctx context.Context, _ *pb.ListRolesRequest) (*pb.ListRolesResponse, error) {
+	roles, err := s.engine.ListRoles(ctx)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing roles: %v", err)
+	}
+
+	pbRoles := make([]*pb.Role, len(roles))
+	for i, r := range roles {
+		pbRoles[i] = roleToProto(r)
+	}
+
+	return &pb.ListRolesResponse{Roles: pbRoles}, nil
+}
+
+// ─── Subject-Role Assignment ────────────────────────────────────────────────
+
+// AssignRole grants a role to a subject.
+func (s *Server) AssignRole(ctx context.Context, req *pb.AssignRoleRequest) (*pb.AssignRoleResponse, error) {
+	if req.Subject == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject is required")
+	}
+	if req.Role == "" {
+		return nil, status.Error(codes.InvalidArgument, "role is required")
+	}
+
+	if err := s.engine.AssignRole(ctx, req.Subject, req.Role); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Role)
+		}
+		return nil, status.Errorf(codes.Internal, "assigning role: %v", err)
+	}
+
+	return &pb.AssignRoleResponse{}, nil
+}
+
+// RevokeRole removes a role from a subject.
+func (s *Server) RevokeRole(ctx context.Context, req *pb.RevokeRoleRequest) (*pb.RevokeRoleResponse, error) {
+	if req.Subject == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject is required")
+	}
+	if req.Role == "" {
+		return nil, status.Error(codes.InvalidArgument, "role is required")
+	}
+
+	if err := s.engine.RevokeRole(ctx, req.Subject, req.Role); err != nil {
+		return nil, status.Errorf(codes.Internal, "revoking role: %v", err)
+	}
+
+	return &pb.RevokeRoleResponse{}, nil
+}
+
+// ListSubjectRoles returns all roles assigned to a subject.
+func (s *Server) ListSubjectRoles(ctx context.Context, req *pb.ListSubjectRolesRequest) (*pb.ListSubjectRolesResponse, error) {
+	if req.Subject == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject is required")
+	}
+
+	roles, err := s.engine.ListSubjectRoles(ctx, req.Subject)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing subject roles: %v", err)
+	}
+
+	return &pb.ListSubjectRolesResponse{Roles: roles}, nil
+}
+
+// ─── Permission Management ──────────────────────────────────────────────────
+
+// AddPermission adds a permission to a role.
+func (s *Server) AddPermission(ctx context.Context, req *pb.AddPermissionRequest) (*pb.AddPermissionResponse, error) {
+	if req.Role == "" {
+		return nil, status.Error(codes.InvalidArgument, "role is required")
+	}
+	if req.Resource == "" {
+		return nil, status.Error(codes.InvalidArgument, "resource is required")
+	}
+	if req.Action == "" {
+		return nil, status.Error(codes.InvalidArgument, "action is required")
+	}
+
+	perm := &store.Permission{
+		Role:     req.Role,
+		Resource: req.Resource,
+		Action:   req.Action,
+	}
+
+	if err := s.engine.AddPermission(ctx, perm); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Role)
+		}
+		return nil, status.Errorf(codes.Internal, "adding permission: %v", err)
+	}
+
+	return &pb.AddPermissionResponse{
+		Permission: permToProto(perm),
+	}, nil
+}
+
+// RemovePermission removes a permission by ID.
+func (s *Server) RemovePermission(ctx context.Context, req *pb.RemovePermissionRequest) (*pb.RemovePermissionResponse, error) {
+	if req.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+
+	if err := s.engine.RemovePermission(ctx, req.Id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "permission %q not found", req.Id)
+		}
+		return nil, status.Errorf(codes.Internal, "removing permission: %v", err)
+	}
+
+	return &pb.RemovePermissionResponse{}, nil
+}
+
+// ListRolePermissions returns all permissions for a role.
+func (s *Server) ListRolePermissions(ctx context.Context, req *pb.ListRolePermissionsRequest) (*pb.ListRolePermissionsResponse, error) {
+	if req.Role == "" {
+		return nil, status.Error(codes.InvalidArgument, "role is required")
+	}
+
+	perms, err := s.engine.ListRolePermissions(ctx, req.Role)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing permissions: %v", err)
+	}
+
+	pbPerms := make([]*pb.Permission, len(perms))
+	for i, p := range perms {
+		pbPerms[i] = permToProto(p)
+	}
+
+	return &pb.ListRolePermissionsResponse{Permissions: pbPerms}, nil
+}
+
+// ─── Proto Conversion Helpers ───────────────────────────────────────────────
+
+func roleToProto(r *store.Role) *pb.Role {
+	return &pb.Role{
+		Name:        r.Name,
+		Description: r.Description,
+		Parents:     r.Parents,
+		CreatedAt:   r.CreatedAt.Unix(),
+	}
+}
+
+func permToProto(p *store.Permission) *pb.Permission {
+	return &pb.Permission{
+		Id:       p.ID,
+		Role:     p.Role,
+		Resource: p.Resource,
+		Action:   p.Action,
+	}
+}

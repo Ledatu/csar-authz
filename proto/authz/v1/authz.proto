@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package csar.authz.v1;
+
+option go_package = "github.com/ledatu/csar-authz/proto/authz/v1;authzv1";
+
+// AuthzService provides RBAC-based authorization decisions and policy management.
+service AuthzService {
+  // CheckAccess evaluates whether a subject can perform an action on a resource.
+  // This is the hot-path RPC called by the CSAR router on every request.
+  rpc CheckAccess(CheckAccessRequest) returns (CheckAccessResponse);
+
+  // --- Role Management ---
+
+  // CreateRole creates a new role with optional parent roles for hierarchy.
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+
+  // DeleteRole removes a role and all its permission bindings.
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+
+  // GetRole returns a single role by name.
+  rpc GetRole(GetRoleRequest) returns (GetRoleResponse);
+
+  // ListRoles returns all defined roles.
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+
+  // --- Subject-Role Assignment ---
+
+  // AssignRole grants a role to a subject.
+  rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
+
+  // RevokeRole removes a role from a subject.
+  rpc RevokeRole(RevokeRoleRequest) returns (RevokeRoleResponse);
+
+  // ListSubjectRoles returns all roles assigned to a subject.
+  rpc ListSubjectRoles(ListSubjectRolesRequest) returns (ListSubjectRolesResponse);
+
+  // --- Permission Management ---
+
+  // AddPermission adds a permission (resource + action) to a role.
+  rpc AddPermission(AddPermissionRequest) returns (AddPermissionResponse);
+
+  // RemovePermission removes a permission by ID.
+  rpc RemovePermission(RemovePermissionRequest) returns (RemovePermissionResponse);
+
+  // ListRolePermissions returns all permissions for a role.
+  rpc ListRolePermissions(ListRolePermissionsRequest) returns (ListRolePermissionsResponse);
+}
+
+// ─── Access Check ───────────────────────────────────────────────────────────
+
+message CheckAccessRequest {
+  // subject is the user identifier (e.g., UUID from JWT sub claim).
+  string subject = 1;
+
+  // resource is the target resource path (e.g., /api/v1/projects/123).
+  string resource = 2;
+
+  // action is the operation being performed (e.g., GET, POST, DELETE).
+  string action = 3;
+
+  // context carries optional key-value attributes for future ABAC extension.
+  map<string, string> context = 4;
+}
+
+message CheckAccessResponse {
+  // allowed is true if the subject has permission.
+  bool allowed = 1;
+
+  // matched_roles lists the roles that granted access (empty if denied).
+  repeated string matched_roles = 2;
+
+  // enriched_headers are key-value pairs to inject into the upstream request
+  // (e.g., X-User-Roles, X-Authz-Decision).
+  map<string, string> enriched_headers = 3;
+}
+
+// ─── Roles ──────────────────────────────────────────────────────────────────
+
+message Role {
+  // name is the unique role identifier (e.g., "admin", "editor").
+  string name = 1;
+
+  // description is a human-readable explanation of the role.
+  string description = 2;
+
+  // parents are the names of parent roles whose permissions are inherited.
+  repeated string parents = 3;
+
+  // created_at is the Unix timestamp when the role was created.
+  int64 created_at = 4;
+}
+
+message CreateRoleRequest {
+  string name = 1;
+  string description = 2;
+  repeated string parents = 3;
+}
+
+message CreateRoleResponse {
+  Role role = 1;
+}
+
+message DeleteRoleRequest {
+  string name = 1;
+}
+
+message DeleteRoleResponse {}
+
+message GetRoleRequest {
+  string name = 1;
+}
+
+message GetRoleResponse {
+  Role role = 1;
+}
+
+message ListRolesRequest {}
+
+message ListRolesResponse {
+  repeated Role roles = 1;
+}
+
+// ─── Assignments ────────────────────────────────────────────────────────────
+
+message AssignRoleRequest {
+  string subject = 1;
+  string role = 2;
+}
+
+message AssignRoleResponse {}
+
+message RevokeRoleRequest {
+  string subject = 1;
+  string role = 2;
+}
+
+message RevokeRoleResponse {}
+
+message ListSubjectRolesRequest {
+  string subject = 1;
+}
+
+message ListSubjectRolesResponse {
+  repeated string roles = 1;
+}
+
+// ─── Permissions ────────────────────────────────────────────────────────────
+
+message Permission {
+  // id is the auto-generated unique identifier.
+  string id = 1;
+
+  // role is the role this permission belongs to.
+  string role = 2;
+
+  // resource is the URL pattern (supports * and ** wildcards).
+  string resource = 3;
+
+  // action is the HTTP method or "*" for any.
+  string action = 4;
+}
+
+message AddPermissionRequest {
+  string role = 1;
+  string resource = 2;
+  string action = 3;
+}
+
+message AddPermissionResponse {
+  Permission permission = 1;
+}
+
+message RemovePermissionRequest {
+  string id = 1;
+}
+
+message RemovePermissionResponse {}
+
+message ListRolePermissionsRequest {
+  string role = 1;
+}
+
+message ListRolePermissionsResponse {
+  repeated Permission permissions = 1;
+}
