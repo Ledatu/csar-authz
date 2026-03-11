@@ -5,10 +5,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/ledatu/csar-core/grpcjwt"
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
-	pb "github.com/ledatu/csar-proto/authz/v1"
+	"github.com/ledatu/csar-core/grpcjwt"
+	pb "github.com/ledatu/csar-proto/csar/authz/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

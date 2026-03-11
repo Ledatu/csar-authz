@@ -32,7 +32,7 @@ import (
 	"github.com/ledatu/csar-authz/internal/store"
 	"github.com/ledatu/csar-authz/internal/store/memory"
 	"github.com/ledatu/csar-authz/internal/store/postgres"
-	pb "github.com/ledatu/csar-proto/authz/v1"
+	pb "github.com/ledatu/csar-proto/csar/authz/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"

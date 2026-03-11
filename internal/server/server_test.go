@@ -6,7 +6,7 @@ import (
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store/memory"
-	pb "github.com/ledatu/csar-proto/authz/v1"
+	pb "github.com/ledatu/csar-proto/csar/authz/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
