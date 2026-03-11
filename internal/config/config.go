@@ -14,24 +14,20 @@ type Duration = configutil.Duration
 
 // Config is the top-level csar-authz configuration.
 type Config struct {
-	ListenAddr string       `yaml:"listen_addr"`
-	TLS        TLSConfig    `yaml:"tls"`
-	GRPC       GRPCConfig   `yaml:"grpc"`
-	Authn      AuthnConfig  `yaml:"authn"`
-	Store      StoreConfig  `yaml:"store"`
-	Policy     PolicyConfig `yaml:"policy"`
+	ListenAddr  string                   `yaml:"listen_addr"`
+	HealthAddr  string                   `yaml:"health_addr"`
+	TLS         configutil.TLSSection    `yaml:"tls"`
+	Health      configutil.HealthSection `yaml:"health"`
+	GRPC        GRPCConfig               `yaml:"grpc"`
+	Authn       AuthnConfig              `yaml:"authn"`
+	Store       StoreConfig              `yaml:"store"`
+	Policy      PolicyConfig             `yaml:"policy"`
 }
 
 // StoreConfig configures the persistence backend.
 type StoreConfig struct {
 	Backend string `yaml:"backend"` // "memory" (default) or "postgres"
 	DSN     string `yaml:"dsn"`     // PostgreSQL connection string (required for postgres backend)
-}
-
-// TLSConfig configures TLS for the gRPC server.
-type TLSConfig struct {
-	CertFile string `yaml:"cert_file"`
-	KeyFile  string `yaml:"key_file"`
 }
 
 // GRPCConfig configures gRPC server options.
@@ -101,6 +97,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":9090"
 	}
+	if cfg.HealthAddr == "" {
+		cfg.HealthAddr = ":9091"
+	}
+	cfg.Health = cfg.Health.WithDefaults()
 	if cfg.Store.Backend == "" {
 		cfg.Store.Backend = "memory"
 	}
@@ -116,6 +116,10 @@ func applyDefaults(cfg *Config) {
 }
 
 func (c *Config) validate() error {
+	if err := c.TLS.Validate(); err != nil {
+		return err
+	}
+
 	// Validate roles.
 	roleNames := make(map[string]struct{})
 	for i, r := range c.Policy.Roles {
@@ -189,8 +193,10 @@ func expandEnv(s string) string {
 
 func expandEnvInConfig(cfg *Config) {
 	cfg.ListenAddr = expandEnv(cfg.ListenAddr)
+	cfg.HealthAddr = expandEnv(cfg.HealthAddr)
 	cfg.TLS.CertFile = expandEnv(cfg.TLS.CertFile)
 	cfg.TLS.KeyFile = expandEnv(cfg.TLS.KeyFile)
+	cfg.TLS.ClientCAFile = expandEnv(cfg.TLS.ClientCAFile)
 	cfg.Authn.JWKSURL = expandEnv(cfg.Authn.JWKSURL)
 	cfg.Authn.PublicKeyFile = expandEnv(cfg.Authn.PublicKeyFile)
 	cfg.Authn.Issuer = expandEnv(cfg.Authn.Issuer)

@@ -7,11 +7,11 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,7 +20,11 @@ import (
 	"github.com/ledatu/csar-core/configload"
 	"github.com/ledatu/csar-core/configsource"
 	"github.com/ledatu/csar-core/grpcjwt"
+	"github.com/ledatu/csar-core/health"
+	"github.com/ledatu/csar-core/httpserver"
 	"github.com/ledatu/csar-core/logutil"
+	"github.com/ledatu/csar-core/observe"
+	"github.com/ledatu/csar-core/tlsx"
 
 	"github.com/ledatu/csar-authz/internal/config"
 	"github.com/ledatu/csar-authz/internal/engine"
@@ -33,6 +37,9 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 )
+
+// Version is set at build time via ldflags.
+var Version = "dev"
 
 // cliOverrides holds flag values that override config file settings.
 type cliOverrides struct {
@@ -48,15 +55,15 @@ func main() {
 	})
 	logger := slog.New(logutil.NewRedactingHandler(inner))
 
-	srcParams, overrides, refreshInterval, hashPolicy, pinnedHash := parseFlags()
+	srcParams, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure := parseFlags()
 
-	if err := run(srcParams, overrides, refreshInterval, hashPolicy, pinnedHash, logger); err != nil {
+	if err := run(srcParams, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure, logger); err != nil {
 		logger.Error("fatal", "error", err)
 		os.Exit(1)
 	}
 }
 
-func parseFlags() (configsource.SourceParams, cliOverrides, string, string, string) {
+func parseFlags() (configsource.SourceParams, cliOverrides, string, string, string, string, bool) {
 	p := configsource.SourceParams{
 		Source:        envOrDefault("CONFIG_SOURCE", "file"),
 		File:          envOrDefault("CONFIG_FILE", "config.yaml"),
@@ -74,6 +81,8 @@ func parseFlags() (configsource.SourceParams, cliOverrides, string, string, stri
 	refreshInterval := envOrDefault("CONFIG_REFRESH_INTERVAL", "0")
 	hashPolicy := envOrDefault("CONFIG_HASH_POLICY", "")
 	pinnedHash := envOrDefault("CONFIG_PINNED_HASH", "")
+	otlpEndpoint := ""
+	otlpInsecure := false
 
 	var overrides cliOverrides
 
@@ -92,6 +101,8 @@ func parseFlags() (configsource.SourceParams, cliOverrides, string, string, stri
 	flag.StringVar(&refreshInterval, "config-refresh-interval", refreshInterval, "config polling interval (e.g. 60s); 0 disables")
 	flag.StringVar(&hashPolicy, "config-hash-policy", hashPolicy, `hash policy: "tofu" or "pinned"`)
 	flag.StringVar(&pinnedHash, "config-pinned-hash", pinnedHash, "pinned SHA-256 hash of config")
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", otlpEndpoint, "OTLP gRPC endpoint for tracing (empty to disable)")
+	flag.BoolVar(&otlpInsecure, "otlp-insecure", otlpInsecure, "use insecure connection for OTLP")
 
 	flag.StringVar(&overrides.listen, "listen", "", "override listen address from config")
 	flag.StringVar(&overrides.tlsCert, "tls-cert", "", "override TLS certificate file from config")
@@ -99,13 +110,14 @@ func parseFlags() (configsource.SourceParams, cliOverrides, string, string, stri
 	flag.StringVar(&overrides.reflection, "reflection", "", "override gRPC reflection from config (true/false)")
 
 	flag.Parse()
-	return p, overrides, refreshInterval, hashPolicy, pinnedHash
+	return p, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure
 }
 
 func run(
 	srcParams configsource.SourceParams,
 	overrides cliOverrides,
-	refreshInterval, hashPolicy, pinnedHash string,
+	refreshInterval, hashPolicy, pinnedHash, otlpEndpoint string,
+	otlpInsecure bool,
 	logger *slog.Logger,
 ) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,11 +139,26 @@ func run(
 		"authn_enabled", cfg.Authn.Enabled,
 	)
 
+	// --- Observability ---
+	tp, err := observe.InitTracer(ctx, observe.TraceConfig{
+		ServiceName:    "csar-authz",
+		ServiceVersion: Version,
+		Endpoint:       otlpEndpoint,
+		Insecure:       otlpInsecure,
+	})
+	if err != nil {
+		return fmt.Errorf("initializing tracer: %w", err)
+	}
+	defer tp.Close()
+
+	reg := observe.NewRegistry()
+
 	// Create store.
 	var storeImpl store.Store
+	var pgStore *postgres.Store
 	switch cfg.Store.Backend {
 	case "postgres":
-		pgStore, err := postgres.New(ctx, cfg.Store.DSN, postgres.WithLogger(logger.With("component", "store")))
+		pgStore, err = postgres.New(ctx, cfg.Store.DSN, postgres.WithLogger(logger.With("component", "store")))
 		if err != nil {
 			return fmt.Errorf("creating postgres store: %w", err)
 		}
@@ -172,16 +199,18 @@ func run(
 		opts = append(opts, grpc.UnaryInterceptor(validator.UnaryInterceptor()))
 	}
 
-	// TLS.
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	// TLS via tlsx.
+	if cfg.TLS.IsEnabled() {
+		tc, err := tlsx.NewServerTLSConfig(tlsx.ServerConfig{
+			CertFile:     cfg.TLS.CertFile,
+			KeyFile:      cfg.TLS.KeyFile,
+			ClientCAFile: cfg.TLS.ClientCAFile,
+			MinVersion:   cfg.TLS.MinVersion,
+		})
 		if err != nil {
-			return fmt.Errorf("loading TLS credentials: %w", err)
+			return fmt.Errorf("TLS config: %w", err)
 		}
-		opts = append(opts, grpc.Creds(credentials.NewTLS(&tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   tls.VersionTLS12,
-		})))
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tc)))
 		logger.Info("TLS enabled")
 	}
 
@@ -192,6 +221,38 @@ func run(
 		reflection.Register(grpcServer)
 		logger.Info("gRPC server reflection enabled")
 	}
+
+	// --- Health and metrics HTTP sidecar ---
+	healthMux := http.NewServeMux()
+	healthMux.Handle("/health", health.Handler(Version))
+	rc := health.NewReadinessChecker(Version, true)
+	if pgStore != nil {
+		pool := pgStore.Pool()
+		rc.Register("postgres", func() health.CheckStatus {
+			if err := pool.Ping(context.Background()); err != nil {
+				return health.CheckStatus{Status: "fail", Detail: err.Error()}
+			}
+			return health.CheckStatus{Status: "ok"}
+		})
+	}
+	healthMux.Handle("/readiness", rc.Handler())
+	healthMux.Handle("/metrics", observe.MetricsHandler(reg))
+
+	healthSrv, err := httpserver.New(&httpserver.Config{
+		Addr:         cfg.HealthAddr,
+		Handler:      healthMux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}, logger.With("component", "health"))
+	if err != nil {
+		return fmt.Errorf("creating health server: %w", err)
+	}
+	go func() {
+		if err := healthSrv.ListenAndServe(); err != nil {
+			logger.Error("health server error", "error", err)
+		}
+	}()
+	logger.Info("health/metrics sidecar started", "addr", cfg.HealthAddr)
 
 	// Config watcher for hot-reload.
 	if interval := parseInterval(refreshInterval); interval > 0 {

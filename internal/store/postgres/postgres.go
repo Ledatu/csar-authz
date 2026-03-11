@@ -57,6 +57,11 @@ func (s *Store) Close() {
 	s.pool.Close()
 }
 
+// Pool returns the underlying pgxpool.Pool for shared use by other components.
+func (s *Store) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
 // --- Roles ---
 
 func (s *Store) CreateRole(ctx context.Context, role *store.Role) error {
