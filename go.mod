@@ -9,8 +9,8 @@ replace github.com/ledatu/csar-proto => ../csar-proto
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/ledatu/csar-core v0.0.0-00010101000000-000000000000
-	github.com/ledatu/csar-proto v0.0.0-00010101000000-000000000000
+	github.com/ledatu/csar-core v0.1.3
+	github.com/ledatu/csar-proto v0.1.0
 	google.golang.org/grpc v1.79.2
 	gopkg.in/yaml.v3 v3.0.1
 )
