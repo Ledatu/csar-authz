@@ -32,31 +32,43 @@ func New(s store.Store) *Engine {
 	return &Engine{store: s}
 }
 
-// CheckAccess evaluates whether a subject can perform an action on a resource.
+// CheckAccess evaluates whether a subject can perform an action on a resource
+// within a given scope.
 //
 // Algorithm:
-//  1. Get the subject's directly assigned roles.
-//  2. Expand role hierarchy by collecting all parent roles (with cycle detection).
-//  3. For each effective role, check if any permission matches (resource + action).
-//  4. Return the result with matched roles and effective roles.
-func (e *Engine) CheckAccess(ctx context.Context, subject, resource, action string) (*Result, error) {
-	// 1. Get direct roles.
-	directRoles, err := e.store.GetSubjectRoles(ctx, subject)
+//  1. Always fetch platform-scoped roles for the subject.
+//  2. If the scope is tenant, also fetch tenant-scoped roles and merge.
+//  3. Expand role hierarchy by collecting all parent roles (with cycle detection).
+//  4. For each effective role, check if any permission matches (resource + action).
+//  5. Return the result with matched roles and effective roles.
+func (e *Engine) CheckAccess(ctx context.Context, subject, scopeType, scopeID, resource, action string) (*Result, error) {
+	// 1. Always get platform roles.
+	platformRoles, err := e.store.GetSubjectRoles(ctx, subject, "platform", "")
 	if err != nil {
 		return nil, err
+	}
+
+	// 2. If tenant scope, also fetch tenant roles and merge.
+	directRoles := platformRoles
+	if scopeType == "tenant" && scopeID != "" {
+		tenantRoles, err := e.store.GetSubjectRoles(ctx, subject, "tenant", scopeID)
+		if err != nil {
+			return nil, err
+		}
+		directRoles = mergeUnique(platformRoles, tenantRoles)
 	}
 
 	if len(directRoles) == 0 {
 		return &Result{Allowed: false}, nil
 	}
 
-	// 2. Expand role hierarchy.
+	// 3. Expand role hierarchy.
 	effectiveRoles, err := e.expandRoles(ctx, directRoles)
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Check permissions for each effective role.
+	// 4. Check permissions for each effective role.
 	var matchedRoles []string
 	for _, role := range effectiveRoles {
 		perms, err := e.store.GetRolePermissions(ctx, role)
@@ -67,7 +79,7 @@ func (e *Engine) CheckAccess(ctx context.Context, subject, resource, action stri
 		for _, perm := range perms {
 			if MatchResource(perm.Resource, resource) && MatchAction(perm.Action, action) {
 				matchedRoles = append(matchedRoles, role)
-				break // found a match in this role, no need to check more perms
+				break
 			}
 		}
 	}
@@ -77,6 +89,25 @@ func (e *Engine) CheckAccess(ctx context.Context, subject, resource, action stri
 		MatchedRoles:   matchedRoles,
 		EffectiveRoles: effectiveRoles,
 	}, nil
+}
+
+// mergeUnique combines two string slices, removing duplicates.
+func mergeUnique(a, b []string) []string {
+	seen := make(map[string]struct{}, len(a)+len(b))
+	result := make([]string, 0, len(a)+len(b))
+	for _, s := range a {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	for _, s := range b {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 // expandRoles resolves a list of role names into the full set of effective roles,
@@ -162,18 +193,18 @@ func (e *Engine) ListRoles(ctx context.Context) ([]*store.Role, error) {
 }
 
 // AssignRole delegates to the store.
-func (e *Engine) AssignRole(ctx context.Context, subject, role string) error {
-	return e.store.AssignRole(ctx, subject, role)
+func (e *Engine) AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
+	return e.store.AssignRole(ctx, subject, role, scopeType, scopeID)
 }
 
 // RevokeRole delegates to the store.
-func (e *Engine) RevokeRole(ctx context.Context, subject, role string) error {
-	return e.store.RevokeRole(ctx, subject, role)
+func (e *Engine) RevokeRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
+	return e.store.RevokeRole(ctx, subject, role, scopeType, scopeID)
 }
 
 // ListSubjectRoles delegates to the store.
-func (e *Engine) ListSubjectRoles(ctx context.Context, subject string) ([]string, error) {
-	return e.store.GetSubjectRoles(ctx, subject)
+func (e *Engine) ListSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error) {
+	return e.store.GetSubjectRoles(ctx, subject, scopeType, scopeID)
 }
 
 // AddPermission delegates to the store.

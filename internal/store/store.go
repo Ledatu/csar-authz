@@ -33,6 +33,14 @@ type Permission struct {
 	Action   string // HTTP method or "*" for any
 }
 
+// ScopedAssignment represents a subject-role binding within a scope.
+type ScopedAssignment struct {
+	Subject   string
+	Role      string
+	ScopeType string // "platform" or "tenant"
+	ScopeID   string // "" for platform, tenant identifier for tenant
+}
+
 // Store defines the persistence contract for csar-authz.
 // Implementations must be safe for concurrent use.
 type Store interface {
@@ -53,21 +61,21 @@ type Store interface {
 
 	// --- Subject-Role Assignments ---
 
-	// AssignRole grants a role to a subject. No-op if already assigned.
+	// AssignRole grants a role to a subject within a scope. No-op if already assigned.
 	// Returns ErrNotFound if the role does not exist.
-	AssignRole(ctx context.Context, subject, role string) error
+	AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error
 
-	// RevokeRole removes a role from a subject. No-op if not assigned.
-	RevokeRole(ctx context.Context, subject, role string) error
+	// RevokeRole removes a role from a subject within a scope. No-op if not assigned.
+	RevokeRole(ctx context.Context, subject, role, scopeType, scopeID string) error
 
-	// GetSubjectRoles returns all directly assigned role names for a subject.
-	GetSubjectRoles(ctx context.Context, subject string) ([]string, error)
+	// GetSubjectRoles returns all directly assigned role names for a subject within a scope.
+	GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error)
 
 	// --- Bulk Operations ---
 
 	// Sync atomically replaces all roles, permissions, and assignments.
 	// Used by config-driven policy loading and hot-reload.
-	Sync(ctx context.Context, roles []*Role, perms []*Permission, assignments map[string][]string) error
+	Sync(ctx context.Context, roles []*Role, perms []*Permission, assignments []ScopedAssignment) error
 
 	// --- Permissions ---
 

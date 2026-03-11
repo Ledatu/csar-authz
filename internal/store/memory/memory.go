@@ -21,6 +21,12 @@ func nextPermID() string {
 	return fmt.Sprintf("perm_%d", permIDCounter.Add(1))
 }
 
+type assignmentKey struct {
+	Subject   string
+	ScopeType string
+	ScopeID   string
+}
+
 // Store is a thread-safe in-memory implementation of store.Store.
 type Store struct {
 	mu sync.RWMutex
@@ -28,8 +34,8 @@ type Store struct {
 	// roles maps role name → Role.
 	roles map[string]*store.Role
 
-	// assignments maps subject → set of role names.
-	assignments map[string]map[string]struct{}
+	// assignments maps (subject, scopeType, scopeID) → set of role names.
+	assignments map[assignmentKey]map[string]struct{}
 
 	// permissions maps role name → slice of permissions.
 	permissions map[string][]*store.Permission
@@ -42,20 +48,20 @@ type Store struct {
 func New() *Store {
 	return &Store{
 		roles:       make(map[string]*store.Role),
-		assignments: make(map[string]map[string]struct{}),
+		assignments: make(map[assignmentKey]map[string]struct{}),
 		permissions: make(map[string][]*store.Permission),
 		permByID:    make(map[string]*store.Permission),
 	}
 }
 
 // Sync atomically replaces all roles, permissions, and assignments.
-func (s *Store) Sync(_ context.Context, roles []*store.Role, perms []*store.Permission, assignments map[string][]string) error {
+func (s *Store) Sync(_ context.Context, roles []*store.Role, perms []*store.Permission, assignments []store.ScopedAssignment) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Clear all state.
 	s.roles = make(map[string]*store.Role, len(roles))
-	s.assignments = make(map[string]map[string]struct{})
+	s.assignments = make(map[assignmentKey]map[string]struct{})
 	s.permissions = make(map[string][]*store.Permission)
 	s.permByID = make(map[string]*store.Permission)
 
@@ -90,16 +96,15 @@ func (s *Store) Sync(_ context.Context, roles []*store.Role, perms []*store.Perm
 	}
 
 	// Insert assignments.
-	for subject, roleNames := range assignments {
-		for _, roleName := range roleNames {
-			if _, ok := s.roles[roleName]; !ok {
-				return fmt.Errorf("assignment role %q for subject %q: %w", roleName, subject, store.ErrNotFound)
-			}
-			if s.assignments[subject] == nil {
-				s.assignments[subject] = make(map[string]struct{})
-			}
-			s.assignments[subject][roleName] = struct{}{}
+	for _, a := range assignments {
+		if _, ok := s.roles[a.Role]; !ok {
+			return fmt.Errorf("assignment role %q for subject %q: %w", a.Role, a.Subject, store.ErrNotFound)
 		}
+		key := assignmentKey{Subject: a.Subject, ScopeType: a.ScopeType, ScopeID: a.ScopeID}
+		if s.assignments[key] == nil {
+			s.assignments[key] = make(map[string]struct{})
+		}
+		s.assignments[key][a.Role] = struct{}{}
 	}
 
 	return nil
@@ -168,10 +173,10 @@ func (s *Store) DeleteRole(_ context.Context, name string) error {
 	delete(s.permissions, name)
 
 	// Remove assignments.
-	for subj, roles := range s.assignments {
+	for key, roles := range s.assignments {
 		delete(roles, name)
 		if len(roles) == 0 {
-			delete(s.assignments, subj)
+			delete(s.assignments, key)
 		}
 	}
 
@@ -206,8 +211,8 @@ func (s *Store) ListRoles(_ context.Context) ([]*store.Role, error) {
 	return result, nil
 }
 
-// AssignRole grants a role to a subject.
-func (s *Store) AssignRole(_ context.Context, subject, role string) error {
+// AssignRole grants a role to a subject within a scope.
+func (s *Store) AssignRole(_ context.Context, subject, role, scopeType, scopeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -215,33 +220,36 @@ func (s *Store) AssignRole(_ context.Context, subject, role string) error {
 		return fmt.Errorf("role %q: %w", role, store.ErrNotFound)
 	}
 
-	if s.assignments[subject] == nil {
-		s.assignments[subject] = make(map[string]struct{})
+	key := assignmentKey{Subject: subject, ScopeType: scopeType, ScopeID: scopeID}
+	if s.assignments[key] == nil {
+		s.assignments[key] = make(map[string]struct{})
 	}
-	s.assignments[subject][role] = struct{}{}
+	s.assignments[key][role] = struct{}{}
 	return nil
 }
 
-// RevokeRole removes a role from a subject.
-func (s *Store) RevokeRole(_ context.Context, subject, role string) error {
+// RevokeRole removes a role from a subject within a scope.
+func (s *Store) RevokeRole(_ context.Context, subject, role, scopeType, scopeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if roles, ok := s.assignments[subject]; ok {
+	key := assignmentKey{Subject: subject, ScopeType: scopeType, ScopeID: scopeID}
+	if roles, ok := s.assignments[key]; ok {
 		delete(roles, role)
 		if len(roles) == 0 {
-			delete(s.assignments, subject)
+			delete(s.assignments, key)
 		}
 	}
 	return nil
 }
 
-// GetSubjectRoles returns all directly assigned role names.
-func (s *Store) GetSubjectRoles(_ context.Context, subject string) ([]string, error) {
+// GetSubjectRoles returns all directly assigned role names within a scope.
+func (s *Store) GetSubjectRoles(_ context.Context, subject, scopeType, scopeID string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	roles, ok := s.assignments[subject]
+	key := assignmentKey{Subject: subject, ScopeType: scopeType, ScopeID: scopeID}
+	roles, ok := s.assignments[key]
 	if !ok {
 		return nil, nil
 	}

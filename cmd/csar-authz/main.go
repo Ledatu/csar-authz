@@ -27,7 +27,8 @@ import (
 	"github.com/ledatu/csar-authz/internal/server"
 	"github.com/ledatu/csar-authz/internal/store"
 	"github.com/ledatu/csar-authz/internal/store/memory"
-	pb "github.com/ledatu/csar-authz/proto/authz/v1"
+	"github.com/ledatu/csar-authz/internal/store/postgres"
+	pb "github.com/ledatu/csar-proto/authz/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
@@ -126,13 +127,29 @@ func run(
 		"authn_enabled", cfg.Authn.Enabled,
 	)
 
-	// Create store and sync policy.
-	memStore := memory.New()
-	if err := syncPolicy(ctx, memStore, cfg, logger); err != nil {
+	// Create store.
+	var storeImpl store.Store
+	switch cfg.Store.Backend {
+	case "postgres":
+		pgStore, err := postgres.New(ctx, cfg.Store.DSN, postgres.WithLogger(logger.With("component", "store")))
+		if err != nil {
+			return fmt.Errorf("creating postgres store: %w", err)
+		}
+		defer pgStore.Close()
+		if err := pgStore.Migrate(ctx); err != nil {
+			return fmt.Errorf("running migrations: %w", err)
+		}
+		storeImpl = pgStore
+	default:
+		storeImpl = memory.New()
+	}
+
+	// Sync policy from config into the store.
+	if err := syncPolicy(ctx, storeImpl, cfg, logger); err != nil {
 		return fmt.Errorf("syncing policy: %w", err)
 	}
 
-	eng := engine.New(memStore)
+	eng := engine.New(storeImpl)
 	srv := server.New(eng)
 
 	// Build gRPC server options.
@@ -199,7 +216,7 @@ func run(
 			if err != nil {
 				return false, err
 			}
-			if err := syncPolicy(ctx, memStore, newCfg, logger); err != nil {
+			if err := syncPolicy(ctx, storeImpl, newCfg, logger); err != nil {
 				return false, fmt.Errorf("syncing policy: %w", err)
 			}
 			logger.Info("policy reloaded",
@@ -220,7 +237,7 @@ func run(
 		return fmt.Errorf("failed to listen on %s: %w", cfg.ListenAddr, err)
 	}
 
-	logger.Info("csar-authz starting", "address", cfg.ListenAddr, "store", "memory")
+	logger.Info("csar-authz starting", "address", cfg.ListenAddr, "store", cfg.Store.Backend)
 
 	// Graceful shutdown.
 	go func() {
@@ -238,7 +255,7 @@ func run(
 }
 
 // syncPolicy converts config policy into store types and calls Sync.
-func syncPolicy(ctx context.Context, s *memory.Store, cfg *config.Config, logger *slog.Logger) error {
+func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
 	var roles []*store.Role
 	var perms []*store.Permission
 
@@ -257,9 +274,20 @@ func syncPolicy(ctx context.Context, s *memory.Store, cfg *config.Config, logger
 		}
 	}
 
-	assignments := make(map[string][]string, len(cfg.Policy.Assignments))
+	var assignments []store.ScopedAssignment
 	for _, ac := range cfg.Policy.Assignments {
-		assignments[ac.Subject] = ac.Roles
+		scopeType := ac.ScopeType
+		if scopeType == "" {
+			scopeType = "platform"
+		}
+		for _, roleName := range ac.Roles {
+			assignments = append(assignments, store.ScopedAssignment{
+				Subject:   ac.Subject,
+				Role:      roleName,
+				ScopeType: scopeType,
+				ScopeID:   ac.ScopeID,
+			})
+		}
 	}
 
 	return s.Sync(ctx, roles, perms, assignments)

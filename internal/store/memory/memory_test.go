@@ -68,7 +68,7 @@ func TestDeleteRole(t *testing.T) {
 	ctx := context.Background()
 
 	_ = s.CreateRole(ctx, &store.Role{Name: "admin"})
-	_ = s.AssignRole(ctx, "user-1", "admin")
+	_ = s.AssignRole(ctx, "user-1", "admin", "platform", "")
 	_ = s.AddPermission(ctx, &store.Permission{Role: "admin", Resource: "/**", Action: "*"})
 
 	err := s.DeleteRole(ctx, "admin")
@@ -82,7 +82,7 @@ func TestDeleteRole(t *testing.T) {
 	}
 
 	// Assignments should be cleaned up.
-	roles, _ := s.GetSubjectRoles(ctx, "user-1")
+	roles, _ := s.GetSubjectRoles(ctx, "user-1", "platform", "")
 	if len(roles) != 0 {
 		t.Errorf("expected no roles after delete, got %v", roles)
 	}
@@ -125,10 +125,10 @@ func TestAssignAndGetSubjectRoles(t *testing.T) {
 	_ = s.CreateRole(ctx, &store.Role{Name: "admin"})
 	_ = s.CreateRole(ctx, &store.Role{Name: "viewer"})
 
-	_ = s.AssignRole(ctx, "user-1", "admin")
-	_ = s.AssignRole(ctx, "user-1", "viewer")
+	_ = s.AssignRole(ctx, "user-1", "admin", "platform", "")
+	_ = s.AssignRole(ctx, "user-1", "viewer", "platform", "")
 
-	roles, err := s.GetSubjectRoles(ctx, "user-1")
+	roles, err := s.GetSubjectRoles(ctx, "user-1", "platform", "")
 	if err != nil {
 		t.Fatalf("GetSubjectRoles: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestAssignAndGetSubjectRoles(t *testing.T) {
 
 func TestAssignRoleNotFound(t *testing.T) {
 	s := New()
-	err := s.AssignRole(context.Background(), "user-1", "nonexistent")
+	err := s.AssignRole(context.Background(), "user-1", "nonexistent", "platform", "")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -150,10 +150,10 @@ func TestRevokeRole(t *testing.T) {
 	ctx := context.Background()
 
 	_ = s.CreateRole(ctx, &store.Role{Name: "admin"})
-	_ = s.AssignRole(ctx, "user-1", "admin")
-	_ = s.RevokeRole(ctx, "user-1", "admin")
+	_ = s.AssignRole(ctx, "user-1", "admin", "platform", "")
+	_ = s.RevokeRole(ctx, "user-1", "admin", "platform", "")
 
-	roles, _ := s.GetSubjectRoles(ctx, "user-1")
+	roles, _ := s.GetSubjectRoles(ctx, "user-1", "platform", "")
 	if len(roles) != 0 {
 		t.Errorf("expected no roles after revoke, got %v", roles)
 	}
@@ -161,7 +161,7 @@ func TestRevokeRole(t *testing.T) {
 
 func TestGetSubjectRolesEmpty(t *testing.T) {
 	s := New()
-	roles, err := s.GetSubjectRoles(context.Background(), "unknown")
+	roles, err := s.GetSubjectRoles(context.Background(), "unknown", "platform", "")
 	if err != nil {
 		t.Fatalf("GetSubjectRoles: %v", err)
 	}
@@ -256,9 +256,9 @@ func TestSync_Basic(t *testing.T) {
 		{Role: "viewer", Resource: "/api/**", Action: "GET"},
 		{Role: "admin", Resource: "/**", Action: "*"},
 	}
-	assignments := map[string][]string{
-		"alice": {"admin"},
-		"bob":   {"viewer"},
+	assignments := []store.ScopedAssignment{
+		{Subject: "alice", Role: "admin", ScopeType: "platform", ScopeID: ""},
+		{Subject: "bob", Role: "viewer", ScopeType: "platform", ScopeID: ""},
 	}
 
 	if err := s.Sync(ctx, roles, perms, assignments); err != nil {
@@ -278,7 +278,7 @@ func TestSync_Basic(t *testing.T) {
 	}
 
 	// Verify assignments.
-	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice")
+	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice", "platform", "")
 	if len(aliceRoles) != 1 || aliceRoles[0] != "admin" {
 		t.Fatalf("alice roles = %v, want [admin]", aliceRoles)
 	}
@@ -290,12 +290,14 @@ func TestSync_ReplacesExisting(t *testing.T) {
 
 	// Initial state.
 	_ = s.CreateRole(ctx, &store.Role{Name: "old"})
-	_ = s.AssignRole(ctx, "user", "old")
+	_ = s.AssignRole(ctx, "user", "old", "platform", "")
 
 	// Sync replaces everything.
 	roles := []*store.Role{{Name: "new"}}
 	perms := []*store.Permission{{Role: "new", Resource: "/**", Action: "*"}}
-	assignments := map[string][]string{"user": {"new"}}
+	assignments := []store.ScopedAssignment{
+		{Subject: "user", Role: "new", ScopeType: "platform", ScopeID: ""},
+	}
 
 	if err := s.Sync(ctx, roles, perms, assignments); err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -349,7 +351,9 @@ func TestSync_InvalidAssignmentRole(t *testing.T) {
 	ctx := context.Background()
 
 	roles := []*store.Role{{Name: "admin"}}
-	assignments := map[string][]string{"user": {"nonexistent"}}
+	assignments := []store.ScopedAssignment{
+		{Subject: "user", Role: "nonexistent", ScopeType: "platform", ScopeID: ""},
+	}
 
 	err := s.Sync(ctx, roles, nil, assignments)
 	if err == nil {
@@ -369,5 +373,91 @@ func TestDeleteRoleCleansParentReferences(t *testing.T) {
 	r, _ := s.GetRole(ctx, "editor")
 	if len(r.Parents) != 0 {
 		t.Errorf("expected parent reference cleaned, got %v", r.Parents)
+	}
+}
+
+// --- Tenant-scoped assignment tests ---
+
+func TestScopedAssignments_Isolation(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	_ = s.CreateRole(ctx, &store.Role{Name: "owner"})
+	_ = s.CreateRole(ctx, &store.Role{Name: "viewer"})
+
+	_ = s.AssignRole(ctx, "user-42", "owner", "tenant", "t-a")
+	_ = s.AssignRole(ctx, "user-42", "viewer", "tenant", "t-b")
+
+	rolesA, _ := s.GetSubjectRoles(ctx, "user-42", "tenant", "t-a")
+	if len(rolesA) != 1 || rolesA[0] != "owner" {
+		t.Errorf("tenant-a: expected [owner], got %v", rolesA)
+	}
+
+	rolesB, _ := s.GetSubjectRoles(ctx, "user-42", "tenant", "t-b")
+	if len(rolesB) != 1 || rolesB[0] != "viewer" {
+		t.Errorf("tenant-b: expected [viewer], got %v", rolesB)
+	}
+
+	// Platform scope should be empty for this user.
+	rolesPlatform, _ := s.GetSubjectRoles(ctx, "user-42", "platform", "")
+	if len(rolesPlatform) != 0 {
+		t.Errorf("platform: expected empty, got %v", rolesPlatform)
+	}
+}
+
+func TestScopedAssignments_RevokeScope(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	_ = s.CreateRole(ctx, &store.Role{Name: "admin"})
+	_ = s.AssignRole(ctx, "user-1", "admin", "tenant", "t1")
+	_ = s.AssignRole(ctx, "user-1", "admin", "tenant", "t2")
+
+	// Revoke from t1 only.
+	_ = s.RevokeRole(ctx, "user-1", "admin", "tenant", "t1")
+
+	roles1, _ := s.GetSubjectRoles(ctx, "user-1", "tenant", "t1")
+	if len(roles1) != 0 {
+		t.Errorf("expected empty after revoke from t1, got %v", roles1)
+	}
+
+	// t2 should be unaffected.
+	roles2, _ := s.GetSubjectRoles(ctx, "user-1", "tenant", "t2")
+	if len(roles2) != 1 {
+		t.Errorf("expected [admin] in t2, got %v", roles2)
+	}
+}
+
+func TestSync_ScopedAssignments(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{
+		{Name: "platform_admin"},
+		{Name: "tenant_viewer"},
+	}
+	assignments := []store.ScopedAssignment{
+		{Subject: "admin-1", Role: "platform_admin", ScopeType: "platform", ScopeID: ""},
+		{Subject: "user-42", Role: "tenant_viewer", ScopeType: "tenant", ScopeID: "t-100"},
+	}
+
+	if err := s.Sync(ctx, roles, nil, assignments); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	adminRoles, _ := s.GetSubjectRoles(ctx, "admin-1", "platform", "")
+	if len(adminRoles) != 1 || adminRoles[0] != "platform_admin" {
+		t.Errorf("expected [platform_admin], got %v", adminRoles)
+	}
+
+	userRoles, _ := s.GetSubjectRoles(ctx, "user-42", "tenant", "t-100")
+	if len(userRoles) != 1 || userRoles[0] != "tenant_viewer" {
+		t.Errorf("expected [tenant_viewer], got %v", userRoles)
+	}
+
+	// User should not appear in platform scope.
+	userPlatform, _ := s.GetSubjectRoles(ctx, "user-42", "platform", "")
+	if len(userPlatform) != 0 {
+		t.Errorf("expected empty platform roles for user-42, got %v", userPlatform)
 	}
 }

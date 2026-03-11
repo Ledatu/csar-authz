@@ -14,11 +14,18 @@ type Duration = configutil.Duration
 
 // Config is the top-level csar-authz configuration.
 type Config struct {
-	ListenAddr string      `yaml:"listen_addr"`
-	TLS        TLSConfig   `yaml:"tls"`
-	GRPC       GRPCConfig  `yaml:"grpc"`
-	Authn      AuthnConfig `yaml:"authn"`
+	ListenAddr string       `yaml:"listen_addr"`
+	TLS        TLSConfig    `yaml:"tls"`
+	GRPC       GRPCConfig   `yaml:"grpc"`
+	Authn      AuthnConfig  `yaml:"authn"`
+	Store      StoreConfig  `yaml:"store"`
 	Policy     PolicyConfig `yaml:"policy"`
+}
+
+// StoreConfig configures the persistence backend.
+type StoreConfig struct {
+	Backend string `yaml:"backend"` // "memory" (default) or "postgres"
+	DSN     string `yaml:"dsn"`     // PostgreSQL connection string (required for postgres backend)
 }
 
 // TLSConfig configures TLS for the gRPC server.
@@ -64,10 +71,12 @@ type PermissionConfig struct {
 	Action   string `yaml:"action"`
 }
 
-// AssignmentConfig maps a subject to one or more roles.
+// AssignmentConfig maps a subject to one or more roles within a scope.
 type AssignmentConfig struct {
-	Subject string   `yaml:"subject"`
-	Roles   []string `yaml:"roles"`
+	Subject   string   `yaml:"subject"`
+	Roles     []string `yaml:"roles"`
+	ScopeType string   `yaml:"scope_type"` // "platform" (default) or "tenant"
+	ScopeID   string   `yaml:"scope_id"`   // "" for platform, tenant identifier for tenant
 }
 
 // LoadFromBytes parses raw YAML bytes into a Config, expanding environment
@@ -91,6 +100,9 @@ func LoadFromBytes(data []byte) (*Config, error) {
 func applyDefaults(cfg *Config) {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":9090"
+	}
+	if cfg.Store.Backend == "" {
+		cfg.Store.Backend = "memory"
 	}
 	if cfg.Authn.SubjectClaim == "" {
 		cfg.Authn.SubjectClaim = "sub"
@@ -146,6 +158,16 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// Validate store.
+	switch c.Store.Backend {
+	case "memory", "postgres":
+	default:
+		return fmt.Errorf("store.backend: must be \"memory\" or \"postgres\", got %q", c.Store.Backend)
+	}
+	if c.Store.Backend == "postgres" && c.Store.DSN == "" {
+		return fmt.Errorf("store.dsn is required when store.backend is \"postgres\"")
+	}
+
 	// Validate authn.
 	if c.Authn.Enabled {
 		hasJWKS := c.Authn.JWKSURL != ""
@@ -173,4 +195,5 @@ func expandEnvInConfig(cfg *Config) {
 	cfg.Authn.PublicKeyFile = expandEnv(cfg.Authn.PublicKeyFile)
 	cfg.Authn.Issuer = expandEnv(cfg.Authn.Issuer)
 	cfg.Authn.Audience = expandEnv(cfg.Authn.Audience)
+	cfg.Store.DSN = expandEnv(cfg.Store.DSN)
 }

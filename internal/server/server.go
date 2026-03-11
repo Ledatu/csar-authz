@@ -8,7 +8,7 @@ import (
 	"github.com/ledatu/csar-core/grpcjwt"
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
-	pb "github.com/ledatu/csar-authz/proto/authz/v1"
+	pb "github.com/ledatu/csar-proto/authz/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -44,8 +44,11 @@ func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*
 	if req.Action == "" {
 		return nil, status.Error(codes.InvalidArgument, "action is required")
 	}
+	if err := validateScope(req.ScopeType, req.ScopeId); err != nil {
+		return nil, err
+	}
 
-	result, err := s.engine.CheckAccess(ctx, req.Subject, req.Resource, req.Action)
+	result, err := s.engine.CheckAccess(ctx, req.Subject, req.ScopeType, req.ScopeId, req.Resource, req.Action)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "authorization check failed: %v", err)
 	}
@@ -138,7 +141,7 @@ func (s *Server) ListRoles(ctx context.Context, _ *pb.ListRolesRequest) (*pb.Lis
 
 // ─── Subject-Role Assignment ────────────────────────────────────────────────
 
-// AssignRole grants a role to a subject.
+// AssignRole grants a role to a subject within a scope.
 func (s *Server) AssignRole(ctx context.Context, req *pb.AssignRoleRequest) (*pb.AssignRoleResponse, error) {
 	if req.Subject == "" {
 		return nil, status.Error(codes.InvalidArgument, "subject is required")
@@ -146,8 +149,11 @@ func (s *Server) AssignRole(ctx context.Context, req *pb.AssignRoleRequest) (*pb
 	if req.Role == "" {
 		return nil, status.Error(codes.InvalidArgument, "role is required")
 	}
+	if err := validateScope(req.ScopeType, req.ScopeId); err != nil {
+		return nil, err
+	}
 
-	if err := s.engine.AssignRole(ctx, req.Subject, req.Role); err != nil {
+	if err := s.engine.AssignRole(ctx, req.Subject, req.Role, req.ScopeType, req.ScopeId); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Role)
 		}
@@ -157,7 +163,7 @@ func (s *Server) AssignRole(ctx context.Context, req *pb.AssignRoleRequest) (*pb
 	return &pb.AssignRoleResponse{}, nil
 }
 
-// RevokeRole removes a role from a subject.
+// RevokeRole removes a role from a subject within a scope.
 func (s *Server) RevokeRole(ctx context.Context, req *pb.RevokeRoleRequest) (*pb.RevokeRoleResponse, error) {
 	if req.Subject == "" {
 		return nil, status.Error(codes.InvalidArgument, "subject is required")
@@ -165,21 +171,27 @@ func (s *Server) RevokeRole(ctx context.Context, req *pb.RevokeRoleRequest) (*pb
 	if req.Role == "" {
 		return nil, status.Error(codes.InvalidArgument, "role is required")
 	}
+	if err := validateScope(req.ScopeType, req.ScopeId); err != nil {
+		return nil, err
+	}
 
-	if err := s.engine.RevokeRole(ctx, req.Subject, req.Role); err != nil {
+	if err := s.engine.RevokeRole(ctx, req.Subject, req.Role, req.ScopeType, req.ScopeId); err != nil {
 		return nil, status.Errorf(codes.Internal, "revoking role: %v", err)
 	}
 
 	return &pb.RevokeRoleResponse{}, nil
 }
 
-// ListSubjectRoles returns all roles assigned to a subject.
+// ListSubjectRoles returns all roles assigned to a subject within a scope.
 func (s *Server) ListSubjectRoles(ctx context.Context, req *pb.ListSubjectRolesRequest) (*pb.ListSubjectRolesResponse, error) {
 	if req.Subject == "" {
 		return nil, status.Error(codes.InvalidArgument, "subject is required")
 	}
+	if err := validateScope(req.ScopeType, req.ScopeId); err != nil {
+		return nil, err
+	}
 
-	roles, err := s.engine.ListSubjectRoles(ctx, req.Subject)
+	roles, err := s.engine.ListSubjectRoles(ctx, req.Subject, req.ScopeType, req.ScopeId)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing subject roles: %v", err)
 	}
@@ -252,6 +264,28 @@ func (s *Server) ListRolePermissions(ctx context.Context, req *pb.ListRolePermis
 	}
 
 	return &pb.ListRolePermissionsResponse{Permissions: pbPerms}, nil
+}
+
+// ─── Scope Helpers ──────────────────────────────────────────────────────────
+
+var validScopeTypes = map[string]struct{}{
+	"platform": {},
+	"tenant":   {},
+}
+
+// validateScope returns an error if scope_type is missing or unrecognized,
+// or if scope_type=tenant but scope_id is empty.
+func validateScope(scopeType, scopeID string) error {
+	if scopeType == "" {
+		return status.Error(codes.InvalidArgument, "scope_type is required")
+	}
+	if _, ok := validScopeTypes[scopeType]; !ok {
+		return status.Errorf(codes.InvalidArgument, "scope_type must be \"platform\" or \"tenant\", got %q", scopeType)
+	}
+	if scopeType == "tenant" && scopeID == "" {
+		return status.Error(codes.InvalidArgument, "scope_id is required when scope_type is \"tenant\"")
+	}
+	return nil
 }
 
 // ─── Proto Conversion Helpers ───────────────────────────────────────────────
