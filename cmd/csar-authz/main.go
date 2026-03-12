@@ -55,68 +55,30 @@ func main() {
 	})
 	logger := slog.New(logutil.NewRedactingHandler(inner))
 
-	srcParams, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure := parseFlags()
+	sf := configload.NewSourceFlags()
+	sf.RegisterFlags(flag.CommandLine)
 
-	if err := run(srcParams, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure, logger); err != nil {
+	var overrides cliOverrides
+	otlpEndpoint := ""
+	otlpInsecure := false
+	flag.StringVar(&otlpEndpoint, "otlp-endpoint", otlpEndpoint, "OTLP gRPC endpoint for tracing (empty to disable)")
+	flag.BoolVar(&otlpInsecure, "otlp-insecure", otlpInsecure, "use insecure connection for OTLP")
+	flag.StringVar(&overrides.listen, "listen", "", "override listen address from config")
+	flag.StringVar(&overrides.tlsCert, "tls-cert", "", "override TLS certificate file from config")
+	flag.StringVar(&overrides.tlsKey, "tls-key", "", "override TLS key file from config")
+	flag.StringVar(&overrides.reflection, "reflection", "", "override gRPC reflection from config (true/false)")
+	flag.Parse()
+
+	if err := run(sf, overrides, otlpEndpoint, otlpInsecure, logger); err != nil {
 		logger.Error("fatal", "error", err)
 		os.Exit(1)
 	}
 }
 
-func parseFlags() (configsource.SourceParams, cliOverrides, string, string, string, string, bool) {
-	p := configsource.SourceParams{
-		Source:        envOrDefault("CONFIG_SOURCE", "file"),
-		File:          envOrDefault("CONFIG_FILE", "config.yaml"),
-		S3Bucket:      envOrDefault("CONFIG_S3_BUCKET", ""),
-		S3Key:         envOrDefault("CONFIG_S3_KEY", "config.yaml"),
-		S3Endpoint:    envOrDefault("CONFIG_S3_ENDPOINT", "https://storage.yandexcloud.net"),
-		S3Region:      envOrDefault("CONFIG_S3_REGION", "ru-central1"),
-		S3AuthMode:    envOrDefault("CONFIG_S3_AUTH_MODE", "static"),
-		S3AccessKeyID: envOrDefault("CONFIG_S3_ACCESS_KEY_ID", ""),
-		S3SecretKey:   envOrDefault("CONFIG_S3_SECRET_ACCESS_KEY", ""),
-		S3IAMToken:    envOrDefault("CONFIG_S3_IAM_TOKEN", ""),
-		S3OAuthToken:  envOrDefault("CONFIG_S3_OAUTH_TOKEN", ""),
-		S3SAKeyFile:   envOrDefault("CONFIG_S3_SA_KEY_FILE", ""),
-	}
-	refreshInterval := envOrDefault("CONFIG_REFRESH_INTERVAL", "0")
-	hashPolicy := envOrDefault("CONFIG_HASH_POLICY", "")
-	pinnedHash := envOrDefault("CONFIG_PINNED_HASH", "")
-	otlpEndpoint := ""
-	otlpInsecure := false
-
-	var overrides cliOverrides
-
-	flag.StringVar(&p.Source, "config-source", p.Source, `config source: "file" or "s3"`)
-	flag.StringVar(&p.File, "config", p.File, "path to config file (file source)")
-	flag.StringVar(&p.S3Bucket, "config-s3-bucket", p.S3Bucket, "S3 bucket for config")
-	flag.StringVar(&p.S3Key, "config-s3-key", p.S3Key, "S3 object key for config")
-	flag.StringVar(&p.S3Endpoint, "config-s3-endpoint", p.S3Endpoint, "S3 endpoint")
-	flag.StringVar(&p.S3Region, "config-s3-region", p.S3Region, "S3 region")
-	flag.StringVar(&p.S3AuthMode, "config-s3-auth-mode", p.S3AuthMode, "S3 auth mode")
-	flag.StringVar(&p.S3AccessKeyID, "config-s3-access-key-id", p.S3AccessKeyID, "S3 access key ID")
-	flag.StringVar(&p.S3SecretKey, "config-s3-secret-access-key", p.S3SecretKey, "S3 secret access key")
-	flag.StringVar(&p.S3IAMToken, "config-s3-iam-token", p.S3IAMToken, "S3 IAM token")
-	flag.StringVar(&p.S3OAuthToken, "config-s3-oauth-token", p.S3OAuthToken, "S3 OAuth token")
-	flag.StringVar(&p.S3SAKeyFile, "config-s3-sa-key-file", p.S3SAKeyFile, "S3 service account key file")
-	flag.StringVar(&refreshInterval, "config-refresh-interval", refreshInterval, "config polling interval (e.g. 60s); 0 disables")
-	flag.StringVar(&hashPolicy, "config-hash-policy", hashPolicy, `hash policy: "tofu" or "pinned"`)
-	flag.StringVar(&pinnedHash, "config-pinned-hash", pinnedHash, "pinned SHA-256 hash of config")
-	flag.StringVar(&otlpEndpoint, "otlp-endpoint", otlpEndpoint, "OTLP gRPC endpoint for tracing (empty to disable)")
-	flag.BoolVar(&otlpInsecure, "otlp-insecure", otlpInsecure, "use insecure connection for OTLP")
-
-	flag.StringVar(&overrides.listen, "listen", "", "override listen address from config")
-	flag.StringVar(&overrides.tlsCert, "tls-cert", "", "override TLS certificate file from config")
-	flag.StringVar(&overrides.tlsKey, "tls-key", "", "override TLS key file from config")
-	flag.StringVar(&overrides.reflection, "reflection", "", "override gRPC reflection from config (true/false)")
-
-	flag.Parse()
-	return p, overrides, refreshInterval, hashPolicy, pinnedHash, otlpEndpoint, otlpInsecure
-}
-
 func run(
-	srcParams configsource.SourceParams,
+	sf *configload.SourceFlags,
 	overrides cliOverrides,
-	refreshInterval, hashPolicy, pinnedHash, otlpEndpoint string,
+	otlpEndpoint string,
 	otlpInsecure bool,
 	logger *slog.Logger,
 ) error {
@@ -124,6 +86,7 @@ func run(
 	defer cancel()
 
 	// Load config.
+	srcParams := sf.SourceParams()
 	cfg, err := configload.LoadInitial(ctx, &srcParams, logger, config.LoadFromBytes)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -255,21 +218,10 @@ func run(
 	logger.Info("health/metrics sidecar started", "addr", cfg.HealthAddr)
 
 	// Config watcher for hot-reload.
-	if interval := parseInterval(refreshInterval); interval > 0 {
+	if interval := sf.ParseRefreshInterval(); interval > 0 {
 		src, err := configsource.BuildSource(&srcParams, logger)
 		if err != nil {
 			return fmt.Errorf("building config source for watcher: %w", err)
-		}
-
-		var watcherOpts []configsource.WatcherOption
-		switch hashPolicy {
-		case "tofu":
-			watcherOpts = append(watcherOpts, configsource.WithHashPolicy(configsource.HashTOFU))
-		case "pinned":
-			watcherOpts = append(watcherOpts, configsource.WithHashPolicy(configsource.HashPinned))
-			if pinnedHash != "" {
-				watcherOpts = append(watcherOpts, configsource.WithPinnedHash(pinnedHash))
-			}
 		}
 
 		applyFn := func(_ context.Context, data []byte) (bool, error) {
@@ -287,7 +239,7 @@ func run(
 			return true, nil
 		}
 
-		watcher := configsource.NewConfigWatcher(src, applyFn, logger.With("component", "config_watcher"), watcherOpts...)
+		watcher := configsource.NewConfigWatcher(src, applyFn, logger.With("component", "config_watcher"), sf.WatcherOptions()...)
 		go watcher.RunPeriodicWatch(ctx, interval)
 		logger.Info("config watcher started", "interval", interval)
 	}
@@ -371,20 +323,3 @@ func applyOverrides(cfg *config.Config, o cliOverrides) {
 	}
 }
 
-func envOrDefault(key, defaultVal string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return defaultVal
-}
-
-func parseInterval(s string) time.Duration {
-	if s == "" || s == "0" {
-		return 0
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0
-	}
-	return d
-}
