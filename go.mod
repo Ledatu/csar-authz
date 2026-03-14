@@ -2,17 +2,12 @@ module github.com/ledatu/csar-authz
 
 go 1.25.0
 
-replace github.com/ledatu/csar-core => ../csar-core
-
-replace github.com/ledatu/csar-proto => ../csar-proto
-
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
-	github.com/ledatu/csar-core v0.1.3
+	github.com/ledatu/csar-core v0.1.5
 	github.com/ledatu/csar-proto v0.1.0
 	google.golang.org/grpc v1.79.2
-	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -61,4 +56,5 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
