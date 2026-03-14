@@ -7,7 +7,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN sed -i '/^replace /d' go.mod && go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /csar-authz ./cmd/csar-authz
+RUN sed -i '/^replace /d' go.mod && \
+    CGO_ENABLED=0 go build -ldflags "-s -w" -o /csar-authz ./cmd/csar-authz
 
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
