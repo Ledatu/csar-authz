@@ -56,6 +56,14 @@ func setupPlatformAdmin(t *testing.T, env *testEnv, subject string) {
 	must(t, env.store.AssignRole(ctx, subject, "platform_admin", "platform", ""))
 }
 
+func setupWildcardPlatformAdmin(t *testing.T, env *testEnv, subject string) {
+	t.Helper()
+	ctx := context.Background()
+	must(t, env.store.CreateRole(ctx, &store.Role{Name: "platform_admin"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "**", Action: "*"}))
+	must(t, env.store.AssignRole(ctx, subject, "platform_admin", "platform", ""))
+}
+
 func setupTenantAdmin(t *testing.T, env *testEnv, subject, tenantID string) {
 	t.Helper()
 	ctx := context.Background()
@@ -191,6 +199,40 @@ func TestCapabilities_TenantAdmin_NoPlatformFlag(t *testing.T) {
 	}
 }
 
+func TestCapabilities_WildcardPlatformAdmin_ExpandsCapabilities(t *testing.T) {
+	env := setup(t)
+	setupWildcardPlatformAdmin(t, env, "root")
+
+	r := reqWithSubject("GET", "/admin/me/capabilities", "root")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp capabilitiesResponse
+	must(t, json.NewDecoder(w.Body).Decode(&resp))
+
+	if !resp.PlatformAdmin {
+		t.Fatal("expected platform_admin=true for wildcard platform admin")
+	}
+
+	actions := make(map[string]struct{}, len(resp.PlatformCapabilities))
+	for _, action := range resp.PlatformCapabilities {
+		actions[action] = struct{}{}
+	}
+	if _, ok := actions["platform.roles.read"]; !ok {
+		t.Fatal("expected wildcard capability expansion to include platform.roles.read")
+	}
+	if _, ok := actions["admin.audit.read"]; !ok {
+		t.Fatal("expected wildcard capability expansion to include admin.audit.read")
+	}
+	if _, ok := actions["*"]; ok {
+		t.Fatal("expected wildcard capability to expand to concrete actions")
+	}
+}
+
 // --- Bug C: platform admin sees all tenants ---
 
 func TestMyTenants_PlatformAdmin_SeesAllTenants(t *testing.T) {
@@ -247,6 +289,38 @@ func TestMyTenants_TenantAdmin_OnlyOwnTenants(t *testing.T) {
 
 	if len(resp.Tenants) != 1 || resp.Tenants[0] != "acme" {
 		t.Fatalf("expected [acme], got %v", resp.Tenants)
+	}
+}
+
+func TestMyTenants_WildcardPlatformAdmin_SeesAllTenants(t *testing.T) {
+	env := setup(t)
+	ctx := context.Background()
+	setupWildcardPlatformAdmin(t, env, "root")
+
+	must(t, env.store.CreateRole(ctx, &store.Role{Name: "viewer"}))
+	must(t, env.store.AssignRole(ctx, "bob", "viewer", "tenant", "acme"))
+	must(t, env.store.AssignRole(ctx, "carol", "viewer", "tenant", "globex"))
+
+	r := reqWithSubject("GET", "/admin/me/tenants", "root")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp myTenantsResponse
+	must(t, json.NewDecoder(w.Body).Decode(&resp))
+
+	tenantSet := make(map[string]struct{})
+	for _, tid := range resp.Tenants {
+		tenantSet[tid] = struct{}{}
+	}
+	if _, ok := tenantSet["acme"]; !ok {
+		t.Error("expected tenant 'acme' in response")
+	}
+	if _, ok := tenantSet["globex"]; !ok {
+		t.Error("expected tenant 'globex' in response")
 	}
 }
 

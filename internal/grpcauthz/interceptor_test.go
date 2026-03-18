@@ -297,6 +297,17 @@ func TestAssignRole_PlatformScope_NoDelegationCheck(t *testing.T) {
 	}
 }
 
+// ── Unmapped RPC fail-closed ─────────────────────────────────────────────────
+
+func TestUnmappedRPC_Denied(t *testing.T) {
+	env := setup(t, true, nil)
+	setupPlatformAdmin(t, env, "admin-1")
+	ctx := withSubject(context.Background(), "admin-1")
+
+	_, err := call(env.interceptor, ctx, servicePath+"SomeNewRPC", nil)
+	assertCode(t, err, codes.PermissionDenied)
+}
+
 // ── SetConfig hot-reload ────────────────────────────────────────────────────
 
 func TestSetConfig_UpdatesDelegatableRoles(t *testing.T) {

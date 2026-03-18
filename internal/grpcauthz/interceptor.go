@@ -6,8 +6,8 @@
 // CheckAccess is the only RPC exempt from authorization — it is the
 // hot-path decision endpoint called by the router on every request.
 //
-// Any new RPCs added to the AuthzService proto MUST be registered in
-// buildPolicies or they will be implicitly open.
+// Unmapped RPCs are denied by default (fail-closed). Only CheckAccess
+// is exempt; all other methods must have an entry in buildPolicies.
 package grpcauthz
 
 import (
@@ -66,7 +66,10 @@ func (i *Interceptor) UnaryInterceptor() grpc.UnaryServerInterceptor {
 	) (any, error) {
 		policy, ok := i.policies[info.FullMethod]
 		if !ok {
-			return handler(ctx, req)
+			if info.FullMethod == servicePath+"CheckAccess" {
+				return handler(ctx, req)
+			}
+			return nil, status.Errorf(codes.PermissionDenied, "no authorization policy for method %s", info.FullMethod)
 		}
 
 		subject, hasSub := grpcjwt.SubjectFromContext(ctx)

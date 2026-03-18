@@ -119,7 +119,7 @@ func run(
 	if err != nil {
 		return fmt.Errorf("initializing tracer: %w", err)
 	}
-	defer tp.Close()
+	defer func() { _ = tp.Close() }()
 
 	reg := observe.NewRegistry()
 
@@ -256,6 +256,12 @@ func run(
 		trustFn := func(r *http.Request) error {
 			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 				return fmt.Errorf("client certificate required for admin API")
+			}
+			if cn := cfg.Admin.AllowedClientCN; cn != "" {
+				peer := r.TLS.PeerCertificates[0]
+				if peer.Subject.CommonName != cn {
+					return fmt.Errorf("client CN %q not authorized for admin API", peer.Subject.CommonName)
+				}
 			}
 			return nil
 		}
@@ -396,10 +402,10 @@ func applyOverrides(cfg *config.Config, o cliOverrides) {
 	if o.tlsKey != "" {
 		cfg.TLS.KeyFile = o.tlsKey
 	}
-	if o.reflection == "true" {
+	switch o.reflection {
+	case "true":
 		cfg.GRPC.Reflection = true
-	} else if o.reflection == "false" {
+	case "false":
 		cfg.GRPC.Reflection = false
 	}
 }
-

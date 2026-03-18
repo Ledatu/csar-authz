@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 
 	"github.com/ledatu/csar-authz/internal/engine"
-	"github.com/ledatu/csar-core/audit"
 	"github.com/ledatu/csar-core/apierror"
+	"github.com/ledatu/csar-core/audit"
 	"github.com/ledatu/csar-core/authzconfig"
 	"github.com/ledatu/csar-core/gatewayctx"
 )

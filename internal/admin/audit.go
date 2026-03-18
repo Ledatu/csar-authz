@@ -52,7 +52,7 @@ func (h *Handler) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.auditStore.List(r.Context(), filter)
+	result, err := h.auditStore.List(r.Context(), &filter)
 	if err != nil {
 		h.logger.Error("failed to list audit events", "error", err)
 		apierror.New("internal_error", http.StatusInternalServerError, "failed to list audit events").Write(w)

@@ -3,7 +3,25 @@ package admin
 import (
 	"context"
 	"net/http"
+
+	"github.com/ledatu/csar-authz/internal/engine"
 )
+
+var platformCapabilities = []string{
+	"platform.roles.read",
+	"platform.roles.create",
+	"platform.roles.delete",
+	"platform.roles.assign",
+	"platform.roles.revoke",
+	"admin.audit.read",
+}
+
+var tenantCapabilities = []string{
+	"tenant.roles.read",
+	"tenant.members.read",
+	"tenant.members.assign_role",
+	"tenant.members.revoke_role",
+}
 
 type capabilitiesResponse struct {
 	Subject              string              `json:"subject"`
@@ -115,15 +133,32 @@ func (h *Handler) collectAdminPermissions(ctx context.Context, subject, scopeTyp
 			continue
 		}
 		for _, p := range rolePerms {
-			if p.Resource != "admin" {
+			if !engine.MatchResource(p.Resource, "admin") {
 				continue
 			}
-			if _, dup := seen[p.Action]; dup {
-				continue
+			for _, action := range expandAdminActions(scopeType, p.Action) {
+				if _, dup := seen[action]; dup {
+					continue
+				}
+				seen[action] = struct{}{}
+				perms = append(perms, action)
 			}
-			seen[p.Action] = struct{}{}
-			perms = append(perms, p.Action)
 		}
 	}
 	return perms
+}
+
+func expandAdminActions(scopeType, action string) []string {
+	if action != "*" {
+		return []string{action}
+	}
+
+	switch scopeType {
+	case "platform":
+		return platformCapabilities
+	case "tenant":
+		return tenantCapabilities
+	default:
+		return []string{action}
+	}
 }
