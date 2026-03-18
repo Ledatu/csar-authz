@@ -207,6 +207,27 @@ func (e *Engine) ListSubjectRoles(ctx context.Context, subject, scopeType, scope
 	return e.store.GetSubjectRoles(ctx, subject, scopeType, scopeID)
 }
 
+// ExpandRoles resolves a list of role names into the full set of effective roles
+// (including inherited parents). Exported for use by the admin HTTP layer.
+func (e *Engine) ExpandRoles(ctx context.Context, roles []string) ([]string, error) {
+	return e.expandRoles(ctx, roles)
+}
+
+// ListScopeAssignments delegates to the store.
+func (e *Engine) ListScopeAssignments(ctx context.Context, scopeType, scopeID string) ([]store.ScopedAssignment, error) {
+	return e.store.ListScopeAssignments(ctx, scopeType, scopeID)
+}
+
+// ListSubjectScopes delegates to the store.
+func (e *Engine) ListSubjectScopes(ctx context.Context, subject string) ([]store.SubjectScope, error) {
+	return e.store.ListSubjectScopes(ctx, subject)
+}
+
+// ListTenants delegates to the store.
+func (e *Engine) ListTenants(ctx context.Context) ([]string, error) {
+	return e.store.ListTenants(ctx)
+}
+
 // AddPermission delegates to the store.
 func (e *Engine) AddPermission(ctx context.Context, perm *store.Permission) error {
 	return e.store.AddPermission(ctx, perm)

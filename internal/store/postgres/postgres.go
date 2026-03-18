@@ -221,6 +221,72 @@ func (s *Store) GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID
 	return roles, rows.Err()
 }
 
+// --- Scope Queries ---
+
+func (s *Store) ListScopeAssignments(ctx context.Context, scopeType, scopeID string) ([]store.ScopedAssignment, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT subject, role, scope_type, scope_id FROM assignments WHERE scope_type = $1 AND scope_id = $2 ORDER BY subject, role`,
+		scopeType, scopeID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing scope assignments: %w", err)
+	}
+	defer rows.Close()
+
+	var assignments []store.ScopedAssignment
+	for rows.Next() {
+		var a store.ScopedAssignment
+		if err := rows.Scan(&a.Subject, &a.Role, &a.ScopeType, &a.ScopeID); err != nil {
+			return nil, fmt.Errorf("scanning assignment: %w", err)
+		}
+		assignments = append(assignments, a)
+	}
+	return assignments, rows.Err()
+}
+
+func (s *Store) ListSubjectScopes(ctx context.Context, subject string) ([]store.SubjectScope, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT scope_type, scope_id FROM assignments WHERE subject = $1 ORDER BY scope_type, scope_id`,
+		subject,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing subject scopes: %w", err)
+	}
+	defer rows.Close()
+
+	var scopes []store.SubjectScope
+	for rows.Next() {
+		var sc store.SubjectScope
+		if err := rows.Scan(&sc.ScopeType, &sc.ScopeID); err != nil {
+			return nil, fmt.Errorf("scanning scope: %w", err)
+		}
+		scopes = append(scopes, sc)
+	}
+	return scopes, rows.Err()
+}
+
+// --- Tenant Discovery ---
+
+func (s *Store) ListTenants(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT scope_id FROM assignments WHERE scope_type = 'tenant' AND scope_id != '' ORDER BY scope_id`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing tenants: %w", err)
+	}
+	defer rows.Close()
+
+	var tenants []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning tenant: %w", err)
+		}
+		tenants = append(tenants, id)
+	}
+	return tenants, rows.Err()
+}
+
 // --- Permissions ---
 
 func (s *Store) AddPermission(ctx context.Context, perm *store.Permission) error {

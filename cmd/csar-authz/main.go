@@ -26,8 +26,15 @@ import (
 	"github.com/ledatu/csar-core/observe"
 	"github.com/ledatu/csar-core/tlsx"
 
+	"github.com/ledatu/csar-core/gatewayctx"
+	"github.com/ledatu/csar-core/httpmiddleware"
+
+	"github.com/ledatu/csar-core/audit"
+
+	"github.com/ledatu/csar-authz/internal/admin"
 	"github.com/ledatu/csar-authz/internal/config"
 	"github.com/ledatu/csar-authz/internal/engine"
+	"github.com/ledatu/csar-authz/internal/grpcauthz"
 	"github.com/ledatu/csar-authz/internal/server"
 	"github.com/ledatu/csar-authz/internal/store"
 	"github.com/ledatu/csar-authz/internal/store/memory"
@@ -145,7 +152,8 @@ func run(
 	// Build gRPC server options.
 	var opts []grpc.ServerOption
 
-	// JWT interceptor.
+	// Interceptor chain: JWT (authn) → authz.
+	var interceptors []grpc.UnaryServerInterceptor
 	if cfg.Authn.Enabled {
 		validator, err := grpcjwt.NewValidator(&grpcjwt.Config{
 			JWKSURL:       cfg.Authn.JWKSURL,
@@ -159,8 +167,11 @@ func run(
 		if err != nil {
 			return fmt.Errorf("initializing authn: %w", err)
 		}
-		opts = append(opts, grpc.UnaryInterceptor(validator.UnaryInterceptor()))
+		interceptors = append(interceptors, validator.UnaryInterceptor())
 	}
+	authzInterceptor := grpcauthz.NewInterceptor(eng, &cfg.Admin, cfg.Authn.Enabled)
+	interceptors = append(interceptors, authzInterceptor.UnaryInterceptor())
+	opts = append(opts, grpc.ChainUnaryInterceptor(interceptors...))
 
 	// TLS via tlsx.
 	if cfg.TLS.IsEnabled() {
@@ -217,6 +228,71 @@ func run(
 	}()
 	logger.Info("health/metrics sidecar started", "addr", cfg.HealthAddr)
 
+	// --- Admin HTTP API ---
+	var adminHandler *admin.Handler
+	if cfg.Admin.Enabled {
+		if cfg.Admin.TLS.ClientCAFile == "" {
+			return fmt.Errorf("admin.tls.client_ca_file is required when admin API is enabled — " +
+				"the admin API uses mTLS to verify that requests originate from a trusted gateway")
+		}
+
+		var auditStore audit.Store
+		if pgStore != nil {
+			pgAudit := audit.NewPostgresStore(pgStore.Pool(), logger.With("component", "audit"))
+			if err := pgAudit.Migrate(ctx); err != nil {
+				return fmt.Errorf("running audit migrations: %w", err)
+			}
+			auditStore = pgAudit
+			logger.Info("audit store initialized (shared postgres pool)")
+		}
+
+		adminHandler = admin.New(eng, auditStore, logger.With("component", "admin"), &cfg.Admin)
+
+		adminMux := http.NewServeMux()
+		adminHandler.RegisterRoutes(adminMux)
+		adminMux.Handle("GET /health", health.Handler(Version))
+		adminMux.Handle("GET /readiness", rc.Handler())
+
+		trustFn := func(r *http.Request) error {
+			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+				return fmt.Errorf("client certificate required for admin API")
+			}
+			return nil
+		}
+
+		adminStack := httpmiddleware.Chain(
+			httpmiddleware.RequestID,
+			httpmiddleware.AccessLog(logger.With("component", "admin")),
+			httpmiddleware.Recover(logger),
+			httpmiddleware.MaxBodySize(1<<20),
+			gatewayctx.TrustedMiddleware(trustFn),
+		)
+
+		adminTLS := &tlsx.ServerConfig{
+			CertFile:     cfg.Admin.TLS.CertFile,
+			KeyFile:      cfg.Admin.TLS.KeyFile,
+			ClientCAFile: cfg.Admin.TLS.ClientCAFile,
+			MinVersion:   cfg.Admin.TLS.MinVersion,
+		}
+
+		adminSrv, err := httpserver.New(&httpserver.Config{
+			Addr:         cfg.Admin.Addr,
+			Handler:      adminStack(adminMux),
+			TLS:          adminTLS,
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 30 * time.Second,
+		}, logger.With("component", "admin-server"))
+		if err != nil {
+			return fmt.Errorf("creating admin server: %w", err)
+		}
+		go func() {
+			if err := adminSrv.ListenAndServe(); err != nil {
+				logger.Error("admin server error", "error", err)
+			}
+		}()
+		logger.Info("admin HTTP API started", "addr", cfg.Admin.Addr)
+	}
+
 	// Config watcher for hot-reload.
 	if interval := sf.ParseRefreshInterval(); interval > 0 {
 		src, err := configsource.BuildSource(&srcParams, logger)
@@ -231,6 +307,10 @@ func run(
 			}
 			if err := syncPolicy(ctx, storeImpl, newCfg, logger); err != nil {
 				return false, fmt.Errorf("syncing policy: %w", err)
+			}
+			authzInterceptor.SetConfig(&newCfg.Admin)
+			if adminHandler != nil {
+				adminHandler.SetConfig(&newCfg.Admin)
 			}
 			logger.Info("policy reloaded",
 				"roles", len(newCfg.Policy.Roles),

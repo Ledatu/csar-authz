@@ -5,8 +5,10 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -258,6 +260,78 @@ func (s *Store) GetSubjectRoles(_ context.Context, subject, scopeType, scopeID s
 	for r := range roles {
 		result = append(result, r)
 	}
+	slices.Sort(result)
+	return result, nil
+}
+
+// ListScopeAssignments returns all assignments within a given scope.
+func (s *Store) ListScopeAssignments(_ context.Context, scopeType, scopeID string) ([]store.ScopedAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []store.ScopedAssignment
+	for key, roles := range s.assignments {
+		if key.ScopeType == scopeType && key.ScopeID == scopeID {
+			for role := range roles {
+				result = append(result, store.ScopedAssignment{
+					Subject:   key.Subject,
+					Role:      role,
+					ScopeType: key.ScopeType,
+					ScopeID:   key.ScopeID,
+				})
+			}
+		}
+	}
+	slices.SortFunc(result, func(a, b store.ScopedAssignment) int {
+		if c := cmp.Compare(a.Subject, b.Subject); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Role, b.Role)
+	})
+	return result, nil
+}
+
+// ListSubjectScopes returns all distinct scopes where a subject has assignments.
+func (s *Store) ListSubjectScopes(_ context.Context, subject string) ([]store.SubjectScope, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	seen := make(map[store.SubjectScope]struct{})
+	var result []store.SubjectScope
+	for key := range s.assignments {
+		if key.Subject == subject {
+			sc := store.SubjectScope{ScopeType: key.ScopeType, ScopeID: key.ScopeID}
+			if _, ok := seen[sc]; !ok {
+				seen[sc] = struct{}{}
+				result = append(result, sc)
+			}
+		}
+	}
+	slices.SortFunc(result, func(a, b store.SubjectScope) int {
+		if c := cmp.Compare(a.ScopeType, b.ScopeType); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.ScopeID, b.ScopeID)
+	})
+	return result, nil
+}
+
+// ListTenants returns all distinct tenant scope IDs that have at least one assignment.
+func (s *Store) ListTenants(_ context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+	var result []string
+	for key := range s.assignments {
+		if key.ScopeType == "tenant" && key.ScopeID != "" {
+			if _, ok := seen[key.ScopeID]; !ok {
+				seen[key.ScopeID] = struct{}{}
+				result = append(result, key.ScopeID)
+			}
+		}
+	}
+	slices.Sort(result)
 	return result, nil
 }
 

@@ -16,6 +16,7 @@ type (
 	RoleConfig       = authzconfig.RoleConfig
 	PermissionConfig = authzconfig.PermissionConfig
 	AssignmentConfig = authzconfig.AssignmentConfig
+	AdminConfig      = authzconfig.AdminConfig
 	Duration         = authzconfig.Duration
 )
 

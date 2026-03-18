@@ -41,6 +41,12 @@ type ScopedAssignment struct {
 	ScopeID   string // "" for platform, tenant identifier for tenant
 }
 
+// SubjectScope represents a distinct scope where a subject has assignments.
+type SubjectScope struct {
+	ScopeType string
+	ScopeID   string
+}
+
 // Store defines the persistence contract for csar-authz.
 // Implementations must be safe for concurrent use.
 type Store interface {
@@ -70,6 +76,17 @@ type Store interface {
 
 	// GetSubjectRoles returns all directly assigned role names for a subject within a scope.
 	GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error)
+
+	// --- Scope Queries ---
+
+	// ListScopeAssignments returns all assignments within a given scope.
+	ListScopeAssignments(ctx context.Context, scopeType, scopeID string) ([]ScopedAssignment, error)
+
+	// ListSubjectScopes returns all distinct (scope_type, scope_id) pairs where a subject has assignments.
+	ListSubjectScopes(ctx context.Context, subject string) ([]SubjectScope, error)
+
+	// ListTenants returns all distinct tenant scope IDs that have at least one assignment.
+	ListTenants(ctx context.Context) ([]string, error)
 
 	// --- Bulk Operations ---
 

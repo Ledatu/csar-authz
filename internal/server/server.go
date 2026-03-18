@@ -266,6 +266,54 @@ func (s *Server) ListRolePermissions(ctx context.Context, req *pb.ListRolePermis
 	return &pb.ListRolePermissionsResponse{Permissions: pbPerms}, nil
 }
 
+// ─── Scope Queries ──────────────────────────────────────────────────────────
+
+// ListScopeAssignments returns all assignments within a scope (e.g., all members of a tenant).
+func (s *Server) ListScopeAssignments(ctx context.Context, req *pb.ListScopeAssignmentsRequest) (*pb.ListScopeAssignmentsResponse, error) {
+	if err := validateScope(req.ScopeType, req.ScopeId); err != nil {
+		return nil, err
+	}
+
+	assignments, err := s.engine.ListScopeAssignments(ctx, req.ScopeType, req.ScopeId)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing scope assignments: %v", err)
+	}
+
+	pbAssignments := make([]*pb.ScopeAssignment, len(assignments))
+	for i, a := range assignments {
+		pbAssignments[i] = &pb.ScopeAssignment{
+			Subject:   a.Subject,
+			Role:      a.Role,
+			ScopeType: a.ScopeType,
+			ScopeId:   a.ScopeID,
+		}
+	}
+
+	return &pb.ListScopeAssignmentsResponse{Assignments: pbAssignments}, nil
+}
+
+// ListSubjectScopes returns all scopes where a subject has assignments.
+func (s *Server) ListSubjectScopes(ctx context.Context, req *pb.ListSubjectScopesRequest) (*pb.ListSubjectScopesResponse, error) {
+	if req.Subject == "" {
+		return nil, status.Error(codes.InvalidArgument, "subject is required")
+	}
+
+	scopes, err := s.engine.ListSubjectScopes(ctx, req.Subject)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "listing subject scopes: %v", err)
+	}
+
+	pbScopes := make([]*pb.SubjectScope, len(scopes))
+	for i, sc := range scopes {
+		pbScopes[i] = &pb.SubjectScope{
+			ScopeType: sc.ScopeType,
+			ScopeId:   sc.ScopeID,
+		}
+	}
+
+	return &pb.ListSubjectScopesResponse{Scopes: pbScopes}, nil
+}
+
 // ─── Scope Helpers ──────────────────────────────────────────────────────────
 
 var validScopeTypes = map[string]struct{}{
