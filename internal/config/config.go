@@ -8,17 +8,17 @@ import (
 )
 
 type (
-	Config           = authzconfig.Config
-	StoreConfig      = authzconfig.StoreConfig
-	GRPCConfig       = authzconfig.GRPCConfig
-	AuthnConfig      = authzconfig.AuthnConfig
-	PolicyConfig     = authzconfig.PolicyConfig
-	RoleConfig       = authzconfig.RoleConfig
-	PermissionConfig = authzconfig.PermissionConfig
+	Config              = authzconfig.Config
+	StoreConfig         = authzconfig.StoreConfig
+	GRPCConfig          = authzconfig.GRPCConfig
+	AuthnConfig         = authzconfig.AuthnConfig
+	PolicyConfig        = authzconfig.PolicyConfig
+	RoleConfig          = authzconfig.RoleConfig
+	PermissionConfig    = authzconfig.PermissionConfig
 	AssignmentConfig    = authzconfig.AssignmentConfig
 	BootstrapAssignment = authzconfig.BootstrapAssignment
 	AdminConfig         = authzconfig.AdminConfig
-	Duration         = authzconfig.Duration
+	Duration            = authzconfig.Duration
 )
 
 var LoadFromBytes = authzconfig.LoadFromBytes
