@@ -341,6 +341,79 @@ func (s *Store) GetRolePermissions(ctx context.Context, role string) ([]*store.P
 
 // --- Bulk Operations ---
 
+// SyncPolicy atomically replaces roles and permissions while preserving
+// runtime assignments. Roles are upserted and obsolete roles are pruned;
+// ON DELETE CASCADE cleans up assignments only for removed roles.
+func (s *Store) SyncPolicy(ctx context.Context, roles []*store.Role, perms []*store.Permission) error {
+	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Phase 1: clear config-owned tables that do NOT cascade to assignments.
+		if _, err := tx.Exec(ctx, `DELETE FROM permissions`); err != nil {
+			return fmt.Errorf("clearing permissions: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM role_parents`); err != nil {
+			return fmt.Errorf("clearing role_parents: %w", err)
+		}
+
+		// Phase 2: upsert roles — surviving rows are updated in place,
+		// so ON DELETE CASCADE is never triggered for them.
+		for _, r := range roles {
+			createdAt := r.CreatedAt
+			if createdAt.IsZero() {
+				createdAt = time.Now()
+			}
+			_, err := tx.Exec(ctx,
+				`INSERT INTO roles (name, description, created_at) VALUES ($1, $2, $3)
+				 ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description`,
+				r.Name, r.Description, createdAt,
+			)
+			if err != nil {
+				return fmt.Errorf("upserting role %q: %w", r.Name, err)
+			}
+		}
+
+		// Phase 3: prune obsolete roles. CASCADE deletes their assignments,
+		// which is correct — those roles no longer exist.
+		names := make([]string, len(roles))
+		for i, r := range roles {
+			names[i] = r.Name
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM roles WHERE NOT (name = ANY($1::text[]))`, names,
+		); err != nil {
+			return fmt.Errorf("pruning obsolete roles: %w", err)
+		}
+
+		// Phase 4: re-insert role_parents and permissions.
+		for _, r := range roles {
+			for _, parent := range r.Parents {
+				_, err := tx.Exec(ctx,
+					`INSERT INTO role_parents (role_name, parent_name) VALUES ($1, $2)`,
+					r.Name, parent,
+				)
+				if err != nil {
+					return fmt.Errorf("inserting parent %q for role %q: %w", parent, r.Name, err)
+				}
+			}
+		}
+
+		for _, p := range perms {
+			id := p.ID
+			if id == "" {
+				id = uuid.New().String()
+			}
+			_, err := tx.Exec(ctx,
+				`INSERT INTO permissions (id, role, resource, action) VALUES ($1, $2, $3, $4)`,
+				id, p.Role, p.Resource, p.Action,
+			)
+			if err != nil {
+				return fmt.Errorf("inserting permission for role %q: %w", p.Role, err)
+			}
+		}
+
+		return nil
+	})
+}
+
 func (s *Store) Sync(ctx context.Context, roles []*store.Role, perms []*store.Permission, assignments []store.ScopedAssignment) error {
 	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
 		for _, table := range []string{"assignments", "permissions", "role_parents", "roles"} {

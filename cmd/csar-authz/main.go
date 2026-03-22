@@ -74,12 +74,95 @@ func main() {
 	flag.StringVar(&overrides.tlsCert, "tls-cert", "", "override TLS certificate file from config")
 	flag.StringVar(&overrides.tlsKey, "tls-key", "", "override TLS key file from config")
 	flag.StringVar(&overrides.reflection, "reflection", "", "override gRPC reflection from config (true/false)")
+	var bootstrapAdmin string
+	flag.StringVar(&bootstrapAdmin, "bootstrap-admin", "", "assign platform_admin to a subject and exit")
 	flag.Parse()
 
-	if err := run(sf, overrides, otlpEndpoint, otlpInsecure, logger); err != nil {
+	var err error
+	if bootstrapAdmin != "" {
+		err = runBootstrap(sf, overrides, bootstrapAdmin, logger)
+	} else {
+		err = run(sf, overrides, otlpEndpoint, otlpInsecure, logger)
+	}
+	if err != nil {
 		logger.Error("fatal", "error", err)
 		os.Exit(1)
 	}
+}
+
+// loadConfig loads the authz config from the configured source and applies CLI overrides.
+func loadConfig(ctx context.Context, sf *configload.SourceFlags, overrides cliOverrides, logger *slog.Logger) (*config.Config, error) {
+	srcParams := sf.SourceParams()
+	cfg, err := configload.LoadInitial(ctx, &srcParams, logger, config.LoadFromBytes)
+	if err != nil {
+		return nil, fmt.Errorf("loading config: %w", err)
+	}
+	applyOverrides(cfg, overrides)
+	return cfg, nil
+}
+
+// storeResult bundles a store with its optional postgres handle (needed for
+// health checks, audit, and pool sharing) and a cleanup function.
+type storeResult struct {
+	store   store.Store
+	pgStore *postgres.Store
+	cleanup func()
+}
+
+// createStore creates the persistence backend, runs migrations, and returns
+// the store with a cleanup function.
+func createStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*storeResult, error) {
+	switch cfg.Store.Backend {
+	case "postgres":
+		pgStore, err := postgres.New(ctx, cfg.Store.DSN, postgres.WithLogger(logger.With("component", "store")))
+		if err != nil {
+			return nil, fmt.Errorf("creating postgres store: %w", err)
+		}
+		if err := pgStore.Migrate(ctx); err != nil {
+			pgStore.Close()
+			return nil, fmt.Errorf("running migrations: %w", err)
+		}
+		return &storeResult{store: pgStore, pgStore: pgStore, cleanup: pgStore.Close}, nil
+	default:
+		return &storeResult{store: memory.New(), cleanup: func() {}}, nil
+	}
+}
+
+// runBootstrap assigns platform_admin to the given subject and exits.
+func runBootstrap(sf *configload.SourceFlags, overrides cliOverrides, subject string, logger *slog.Logger) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg, err := loadConfig(ctx, sf, overrides, logger)
+	if err != nil {
+		return err
+	}
+
+	sr, err := createStore(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	defer sr.cleanup()
+
+	if err := syncPolicy(ctx, sr.store, cfg, logger); err != nil {
+		return fmt.Errorf("syncing policy: %w", err)
+	}
+
+	const roleName = "platform_admin"
+	if err := sr.store.AssignRole(ctx, subject, roleName, "platform", ""); err != nil {
+		return fmt.Errorf("assigning %s to %q: %w", roleName, subject, err)
+	}
+
+	roles, err := sr.store.GetSubjectRoles(ctx, subject, "platform", "")
+	if err != nil {
+		return fmt.Errorf("reading back roles for %q: %w", subject, err)
+	}
+
+	logger.Info("bootstrap complete",
+		"subject", subject,
+		"platform_roles", roles,
+	)
+	return nil
 }
 
 func run(
@@ -92,20 +175,14 @@ func run(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Load config.
-	srcParams := sf.SourceParams()
-	cfg, err := configload.LoadInitial(ctx, &srcParams, logger, config.LoadFromBytes)
+	cfg, err := loadConfig(ctx, sf, overrides, logger)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return err
 	}
-
-	// Apply CLI overrides.
-	applyOverrides(cfg, overrides)
 
 	logger.Info("config loaded",
 		"listen_addr", cfg.ListenAddr,
 		"roles", len(cfg.Policy.Roles),
-		"assignments", len(cfg.Policy.Assignments),
 		"authn_enabled", cfg.Authn.Enabled,
 	)
 
@@ -123,23 +200,13 @@ func run(
 
 	reg := observe.NewRegistry()
 
-	// Create store.
-	var storeImpl store.Store
-	var pgStore *postgres.Store
-	switch cfg.Store.Backend {
-	case "postgres":
-		pgStore, err = postgres.New(ctx, cfg.Store.DSN, postgres.WithLogger(logger.With("component", "store")))
-		if err != nil {
-			return fmt.Errorf("creating postgres store: %w", err)
-		}
-		defer pgStore.Close()
-		if err := pgStore.Migrate(ctx); err != nil {
-			return fmt.Errorf("running migrations: %w", err)
-		}
-		storeImpl = pgStore
-	default:
-		storeImpl = memory.New()
+	sr, err := createStore(ctx, cfg, logger)
+	if err != nil {
+		return err
 	}
+	defer sr.cleanup()
+	storeImpl := sr.store
+	pgStore := sr.pgStore
 
 	// Sync policy from config into the store.
 	if err := syncPolicy(ctx, storeImpl, cfg, logger); err != nil {
@@ -301,7 +368,8 @@ func run(
 
 	// Config watcher for hot-reload.
 	if interval := sf.ParseRefreshInterval(); interval > 0 {
-		src, err := configsource.BuildSource(&srcParams, logger)
+		watchParams := sf.SourceParams()
+		src, err := configsource.BuildSource(&watchParams, logger)
 		if err != nil {
 			return fmt.Errorf("building config source for watcher: %w", err)
 		}
@@ -320,7 +388,6 @@ func run(
 			}
 			logger.Info("policy reloaded",
 				"roles", len(newCfg.Policy.Roles),
-				"assignments", len(newCfg.Policy.Assignments),
 			)
 			return true, nil
 		}
@@ -353,7 +420,8 @@ func run(
 	return nil
 }
 
-// syncPolicy converts config policy into store types and calls Sync.
+// syncPolicy converts config roles and permissions into store types and
+// calls SyncPolicy. Assignments are runtime-managed and not touched here.
 func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
 	var roles []*store.Role
 	var perms []*store.Permission
@@ -373,23 +441,7 @@ func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *
 		}
 	}
 
-	var assignments []store.ScopedAssignment
-	for _, ac := range cfg.Policy.Assignments {
-		scopeType := ac.ScopeType
-		if scopeType == "" {
-			scopeType = "platform"
-		}
-		for _, roleName := range ac.Roles {
-			assignments = append(assignments, store.ScopedAssignment{
-				Subject:   ac.Subject,
-				Role:      roleName,
-				ScopeType: scopeType,
-				ScopeID:   ac.ScopeID,
-			})
-		}
-	}
-
-	return s.Sync(ctx, roles, perms, assignments)
+	return s.SyncPolicy(ctx, roles, perms)
 }
 
 func applyOverrides(cfg *config.Config, o cliOverrides) {

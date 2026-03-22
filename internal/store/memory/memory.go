@@ -56,6 +56,61 @@ func New() *Store {
 	}
 }
 
+// SyncPolicy atomically replaces roles and permissions while preserving
+// runtime assignments. Assignments referencing removed roles are pruned.
+func (s *Store) SyncPolicy(_ context.Context, roles []*store.Role, perms []*store.Permission) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	newRoles := make(map[string]*store.Role, len(roles))
+	for _, r := range roles {
+		for _, parent := range r.Parents {
+			if _, ok := newRoles[parent]; !ok {
+				return fmt.Errorf("parent role %q: %w", parent, store.ErrNotFound)
+			}
+		}
+		cp := *r
+		parents := make([]string, len(r.Parents))
+		copy(parents, r.Parents)
+		cp.Parents = parents
+		if cp.CreatedAt.IsZero() {
+			cp.CreatedAt = time.Now()
+		}
+		newRoles[cp.Name] = &cp
+	}
+
+	newPerms := make(map[string][]*store.Permission)
+	newPermByID := make(map[string]*store.Permission)
+	for _, p := range perms {
+		if _, ok := newRoles[p.Role]; !ok {
+			return fmt.Errorf("permission role %q: %w", p.Role, store.ErrNotFound)
+		}
+		cp := *p
+		if cp.ID == "" {
+			cp.ID = nextPermID()
+		}
+		newPerms[cp.Role] = append(newPerms[cp.Role], &cp)
+		newPermByID[cp.ID] = &cp
+	}
+
+	// Prune assignments referencing roles that no longer exist.
+	for key, roleSet := range s.assignments {
+		for roleName := range roleSet {
+			if _, ok := newRoles[roleName]; !ok {
+				delete(roleSet, roleName)
+			}
+		}
+		if len(roleSet) == 0 {
+			delete(s.assignments, key)
+		}
+	}
+
+	s.roles = newRoles
+	s.permissions = newPerms
+	s.permByID = newPermByID
+	return nil
+}
+
 // Sync atomically replaces all roles, permissions, and assignments.
 func (s *Store) Sync(_ context.Context, roles []*store.Role, perms []*store.Permission, assignments []store.ScopedAssignment) error {
 	s.mu.Lock()

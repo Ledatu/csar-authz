@@ -12,9 +12,6 @@ policy:
       permissions:
         - resource: "/**"
           action: "*"
-  assignments:
-    - subject: "alice"
-      roles: [admin]
 `
 	cfg, err := LoadFromBytes([]byte(yaml))
 	if err != nil {
@@ -28,9 +25,6 @@ policy:
 	}
 	if cfg.Policy.Roles[0].Name != "admin" {
 		t.Fatalf("role name = %q, want admin", cfg.Policy.Roles[0].Name)
-	}
-	if len(cfg.Policy.Assignments) != 1 {
-		t.Fatalf("assignments = %d, want 1", len(cfg.Policy.Assignments))
 	}
 }
 
@@ -99,7 +93,7 @@ policy:
 	}
 }
 
-func TestLoadFromBytes_AssignmentBadRole(t *testing.T) {
+func TestLoadFromBytes_NonEmptyAssignmentsRejected(t *testing.T) {
 	yaml := `
 policy:
   roles:
@@ -109,11 +103,11 @@ policy:
           action: "GET"
   assignments:
     - subject: "bob"
-      roles: [nonexistent]
+      roles: [viewer]
 `
 	_, err := LoadFromBytes([]byte(yaml))
 	if err == nil {
-		t.Fatal("expected error: assignment references nonexistent role")
+		t.Fatal("expected error: non-empty policy.assignments should be rejected")
 	}
 }
 
@@ -205,11 +199,6 @@ policy:
       permissions:
         - resource: "/**"
           action: "*"
-  assignments:
-    - subject: "alice"
-      roles: [admin]
-    - subject: "bob"
-      roles: [viewer]
 `
 	cfg, err := LoadFromBytes([]byte(yaml))
 	if err != nil {

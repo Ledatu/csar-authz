@@ -90,8 +90,14 @@ type Store interface {
 
 	// --- Bulk Operations ---
 
-	// Sync atomically replaces all roles, permissions, and assignments.
-	// Used by config-driven policy loading and hot-reload.
+	// SyncPolicy atomically replaces roles and permissions from config.
+	// Assignments are preserved for roles that still exist; assignments
+	// referencing removed roles are deleted.
+	SyncPolicy(ctx context.Context, roles []*Role, perms []*Permission) error
+
+	// Deprecated: Sync atomically replaces all roles, permissions, and
+	// assignments. Use SyncPolicy for production startup/reload paths —
+	// Sync wipes runtime assignments and should only be used in tests.
 	Sync(ctx context.Context, roles []*Role, perms []*Permission, assignments []ScopedAssignment) error
 
 	// --- Permissions ---

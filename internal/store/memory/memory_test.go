@@ -428,6 +428,128 @@ func TestScopedAssignments_RevokeScope(t *testing.T) {
 	}
 }
 
+// --- SyncPolicy tests ---
+
+func TestSyncPolicy_Basic(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{
+		{Name: "viewer", Description: "Read-only"},
+		{Name: "admin", Description: "Full access", Parents: []string{"viewer"}},
+	}
+	perms := []*store.Permission{
+		{Role: "viewer", Resource: "/api/**", Action: "GET"},
+		{Role: "admin", Resource: "/**", Action: "*"},
+	}
+
+	if err := s.SyncPolicy(ctx, roles, perms); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	allRoles, _ := s.ListRoles(ctx)
+	if len(allRoles) != 2 {
+		t.Fatalf("roles = %d, want 2", len(allRoles))
+	}
+
+	viewerPerms, _ := s.GetRolePermissions(ctx, "viewer")
+	if len(viewerPerms) != 1 {
+		t.Fatalf("viewer perms = %d, want 1", len(viewerPerms))
+	}
+}
+
+func TestSyncPolicy_PreservesAssignments(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{
+		{Name: "viewer"},
+		{Name: "admin", Parents: []string{"viewer"}},
+	}
+	perms := []*store.Permission{
+		{Role: "admin", Resource: "/**", Action: "*"},
+	}
+
+	if err := s.SyncPolicy(ctx, roles, perms); err != nil {
+		t.Fatalf("initial SyncPolicy: %v", err)
+	}
+
+	if err := s.AssignRole(ctx, "alice", "admin", "platform", ""); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+	if err := s.AssignRole(ctx, "bob", "viewer", "tenant", "t-1"); err != nil {
+		t.Fatalf("AssignRole: %v", err)
+	}
+
+	// Re-sync with updated permissions but same roles.
+	perms = []*store.Permission{
+		{Role: "admin", Resource: "/**", Action: "*"},
+		{Role: "viewer", Resource: "/api/**", Action: "GET"},
+	}
+	if err := s.SyncPolicy(ctx, roles, perms); err != nil {
+		t.Fatalf("second SyncPolicy: %v", err)
+	}
+
+	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice", "platform", "")
+	if len(aliceRoles) != 1 || aliceRoles[0] != "admin" {
+		t.Fatalf("alice roles = %v, want [admin]", aliceRoles)
+	}
+
+	bobRoles, _ := s.GetSubjectRoles(ctx, "bob", "tenant", "t-1")
+	if len(bobRoles) != 1 || bobRoles[0] != "viewer" {
+		t.Fatalf("bob roles = %v, want [viewer]", bobRoles)
+	}
+}
+
+func TestSyncPolicy_PrunesOrphanedAssignments(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{{Name: "admin"}, {Name: "viewer"}}
+	if err := s.SyncPolicy(ctx, roles, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	_ = s.AssignRole(ctx, "alice", "admin", "platform", "")
+	_ = s.AssignRole(ctx, "alice", "viewer", "platform", "")
+
+	// Re-sync without "admin" role.
+	if err := s.SyncPolicy(ctx, []*store.Role{{Name: "viewer"}}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice", "platform", "")
+	if len(aliceRoles) != 1 || aliceRoles[0] != "viewer" {
+		t.Fatalf("alice roles = %v, want [viewer]", aliceRoles)
+	}
+}
+
+func TestSyncPolicy_UpdatesRoleDescription(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	roles := []*store.Role{{Name: "admin", Description: "old"}}
+	if err := s.SyncPolicy(ctx, roles, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+	_ = s.AssignRole(ctx, "alice", "admin", "platform", "")
+
+	roles = []*store.Role{{Name: "admin", Description: "new"}}
+	if err := s.SyncPolicy(ctx, roles, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	r, _ := s.GetRole(ctx, "admin")
+	if r.Description != "new" {
+		t.Fatalf("description = %q, want new", r.Description)
+	}
+
+	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice", "platform", "")
+	if len(aliceRoles) != 1 || aliceRoles[0] != "admin" {
+		t.Fatalf("alice roles = %v, want [admin]", aliceRoles)
+	}
+}
+
 func TestSync_ScopedAssignments(t *testing.T) {
 	s := New()
 	ctx := context.Background()
