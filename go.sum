@@ -68,6 +68,8 @@ github.com/ledatu/csar-core v0.1.11 h1:CEd8V0nbZ9KLpOdpPA3nYxdaDyaqiMiZDrxxCGx/p
 github.com/ledatu/csar-core v0.1.11/go.mod h1:lP3hrt7uLU6PWKn8M4LzN7K9on7GUwRnSzOjTVmru6w=
 github.com/ledatu/csar-proto v0.1.1 h1:Ihu+UqKWzA/ndxsu614F2AuaSE1LAWIU/pvD0+vAaF8=
 github.com/ledatu/csar-proto v0.1.1/go.mod h1:HlqVobOX4ChofAQrwRsiyq62VKTNAuRsNGmZQwHJl7I=
+github.com/ledatu/csar-proto v0.1.2 h1:mUcy4PWUbCTeekhLoDW1LqVxda3ZeHqau10DpvnsydM=
+github.com/ledatu/csar-proto v0.1.2/go.mod h1:HlqVobOX4ChofAQrwRsiyq62VKTNAuRsNGmZQwHJl7I=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
