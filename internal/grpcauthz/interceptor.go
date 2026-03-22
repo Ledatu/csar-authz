@@ -175,5 +175,7 @@ func buildPolicies() map[string]policyFunc {
 		return "tenant.members.read", r.ScopeType, r.ScopeId
 	}
 
+	m[servicePath+"ReassignSubject"] = static("platform.subjects.reassign")
+
 	return m
 }

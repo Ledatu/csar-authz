@@ -287,6 +287,37 @@ func (s *Store) ListTenants(ctx context.Context) ([]string, error) {
 	return tenants, rows.Err()
 }
 
+// --- Subject Reassignment ---
+
+func (s *Store) ReassignSubject(ctx context.Context, source, target string) (int, error) {
+	var reassigned int
+	err := pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Copy source assignments to target (dedup via ON CONFLICT DO NOTHING).
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO assignments (subject, role, scope_type, scope_id, assigned_at)
+			 SELECT $1, role, scope_type, scope_id, now()
+			 FROM assignments
+			 WHERE subject = $2
+			 ON CONFLICT (subject, scope_type, scope_id, role) DO NOTHING`,
+			target, source,
+		)
+		if err != nil {
+			return fmt.Errorf("copying assignments: %w", err)
+		}
+		reassigned = int(tag.RowsAffected())
+
+		// Delete source assignments.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM assignments WHERE subject = $1`, source,
+		); err != nil {
+			return fmt.Errorf("deleting source assignments: %w", err)
+		}
+
+		return nil
+	})
+	return reassigned, err
+}
+
 // --- Permissions ---
 
 func (s *Store) AddPermission(ctx context.Context, perm *store.Permission) error {

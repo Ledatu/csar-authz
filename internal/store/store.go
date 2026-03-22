@@ -88,6 +88,13 @@ type Store interface {
 	// ListTenants returns all distinct tenant scope IDs that have at least one assignment.
 	ListTenants(ctx context.Context) ([]string, error)
 
+	// --- Subject Reassignment ---
+
+	// ReassignSubject moves all assignments from source to target subject.
+	// Duplicate assignments on the target are skipped. Returns the number
+	// of assignments effectively moved. Idempotent.
+	ReassignSubject(ctx context.Context, source, target string) (int, error)
+
 	// --- Bulk Operations ---
 
 	// SyncPolicy atomically replaces roles and permissions from config.

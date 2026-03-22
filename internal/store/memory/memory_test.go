@@ -583,3 +583,83 @@ func TestSync_ScopedAssignments(t *testing.T) {
 		t.Errorf("expected empty platform roles for user-42, got %v", userPlatform)
 	}
 }
+
+func TestReassignSubject(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	_ = s.CreateRole(ctx, &store.Role{Name: "viewer"})
+	_ = s.CreateRole(ctx, &store.Role{Name: "editor"})
+
+	_ = s.AssignRole(ctx, "source-user", "viewer", "platform", "")
+	_ = s.AssignRole(ctx, "source-user", "editor", "tenant", "t-1")
+
+	reassigned, err := s.ReassignSubject(ctx, "source-user", "target-user")
+	if err != nil {
+		t.Fatalf("ReassignSubject: %v", err)
+	}
+	if reassigned != 2 {
+		t.Fatalf("expected 2 reassigned, got %d", reassigned)
+	}
+
+	// Source should have no assignments.
+	srcScopes, _ := s.ListSubjectScopes(ctx, "source-user")
+	if len(srcScopes) != 0 {
+		t.Errorf("source should have no scopes, got %v", srcScopes)
+	}
+
+	// Target should have both assignments.
+	tgtPlatform, _ := s.GetSubjectRoles(ctx, "target-user", "platform", "")
+	if len(tgtPlatform) != 1 || tgtPlatform[0] != "viewer" {
+		t.Errorf("expected [viewer] on target platform, got %v", tgtPlatform)
+	}
+	tgtTenant, _ := s.GetSubjectRoles(ctx, "target-user", "tenant", "t-1")
+	if len(tgtTenant) != 1 || tgtTenant[0] != "editor" {
+		t.Errorf("expected [editor] on target tenant, got %v", tgtTenant)
+	}
+}
+
+func TestReassignSubject_Dedup(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	_ = s.CreateRole(ctx, &store.Role{Name: "viewer"})
+
+	// Both source and target have the viewer role.
+	_ = s.AssignRole(ctx, "source", "viewer", "platform", "")
+	_ = s.AssignRole(ctx, "target", "viewer", "platform", "")
+
+	reassigned, err := s.ReassignSubject(ctx, "source", "target")
+	if err != nil {
+		t.Fatalf("ReassignSubject: %v", err)
+	}
+	// Dedup: target already had viewer, so 0 new assignments.
+	if reassigned != 0 {
+		t.Fatalf("expected 0 new reassigned (dedup), got %d", reassigned)
+	}
+
+	// Source should be clean.
+	srcRoles, _ := s.GetSubjectRoles(ctx, "source", "platform", "")
+	if len(srcRoles) != 0 {
+		t.Errorf("source should have no roles, got %v", srcRoles)
+	}
+}
+
+func TestReassignSubject_Idempotent(t *testing.T) {
+	s := New()
+	ctx := context.Background()
+
+	_ = s.CreateRole(ctx, &store.Role{Name: "admin"})
+	_ = s.AssignRole(ctx, "src", "admin", "platform", "")
+
+	_, _ = s.ReassignSubject(ctx, "src", "tgt")
+
+	// Second call should be no-op (nothing to move).
+	reassigned, err := s.ReassignSubject(ctx, "src", "tgt")
+	if err != nil {
+		t.Fatalf("second ReassignSubject: %v", err)
+	}
+	if reassigned != 0 {
+		t.Fatalf("expected 0 on idempotent call, got %d", reassigned)
+	}
+}

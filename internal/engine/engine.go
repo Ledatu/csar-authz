@@ -228,6 +228,11 @@ func (e *Engine) ListTenants(ctx context.Context) ([]string, error) {
 	return e.store.ListTenants(ctx)
 }
 
+// ReassignSubject delegates to the store.
+func (e *Engine) ReassignSubject(ctx context.Context, source, target string) (int, error) {
+	return e.store.ReassignSubject(ctx, source, target)
+}
+
 // AddPermission delegates to the store.
 func (e *Engine) AddPermission(ctx context.Context, perm *store.Permission) error {
 	return e.store.AddPermission(ctx, perm)

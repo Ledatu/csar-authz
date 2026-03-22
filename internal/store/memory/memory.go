@@ -390,6 +390,48 @@ func (s *Store) ListTenants(_ context.Context) ([]string, error) {
 	return result, nil
 }
 
+// ReassignSubject moves all assignments from source to target.
+func (s *Store) ReassignSubject(_ context.Context, source, target string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var reassigned int
+	// Collect source's assignments.
+	type assignment struct {
+		key  assignmentKey
+		role string
+	}
+	var toMove []assignment
+	for key, roles := range s.assignments {
+		if key.Subject == source {
+			for role := range roles {
+				toMove = append(toMove, assignment{key: key, role: role})
+			}
+		}
+	}
+
+	// Move to target.
+	for _, a := range toMove {
+		targetKey := assignmentKey{Subject: target, ScopeType: a.key.ScopeType, ScopeID: a.key.ScopeID}
+		if s.assignments[targetKey] == nil {
+			s.assignments[targetKey] = make(map[string]struct{})
+		}
+		if _, exists := s.assignments[targetKey][a.role]; !exists {
+			s.assignments[targetKey][a.role] = struct{}{}
+			reassigned++
+		}
+	}
+
+	// Remove source assignments.
+	for key := range s.assignments {
+		if key.Subject == source {
+			delete(s.assignments, key)
+		}
+	}
+
+	return reassigned, nil
+}
+
 // AddPermission adds a permission to a role.
 func (s *Store) AddPermission(_ context.Context, perm *store.Permission) error {
 	s.mu.Lock()

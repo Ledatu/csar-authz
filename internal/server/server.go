@@ -266,6 +266,28 @@ func (s *Server) ListRolePermissions(ctx context.Context, req *pb.ListRolePermis
 	return &pb.ListRolePermissionsResponse{Permissions: pbPerms}, nil
 }
 
+// ─── Subject Reassignment ───────────────────────────────────────────────────
+
+// ReassignSubject moves all assignments from one subject to another.
+func (s *Server) ReassignSubject(ctx context.Context, req *pb.ReassignSubjectRequest) (*pb.ReassignSubjectResponse, error) {
+	if req.SourceSubject == "" {
+		return nil, status.Error(codes.InvalidArgument, "source_subject is required")
+	}
+	if req.TargetSubject == "" {
+		return nil, status.Error(codes.InvalidArgument, "target_subject is required")
+	}
+	if req.SourceSubject == req.TargetSubject {
+		return nil, status.Error(codes.InvalidArgument, "source and target must differ")
+	}
+
+	count, err := s.engine.ReassignSubject(ctx, req.SourceSubject, req.TargetSubject)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "reassigning subject: %v", err)
+	}
+
+	return &pb.ReassignSubjectResponse{Reassigned: int32(count)}, nil
+}
+
 // ─── Scope Queries ──────────────────────────────────────────────────────────
 
 // ListScopeAssignments returns all assignments within a scope (e.g., all members of a tenant).
