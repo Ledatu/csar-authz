@@ -15,8 +15,9 @@ type (
 	PolicyConfig     = authzconfig.PolicyConfig
 	RoleConfig       = authzconfig.RoleConfig
 	PermissionConfig = authzconfig.PermissionConfig
-	AssignmentConfig = authzconfig.AssignmentConfig
-	AdminConfig      = authzconfig.AdminConfig
+	AssignmentConfig    = authzconfig.AssignmentConfig
+	BootstrapAssignment = authzconfig.BootstrapAssignment
+	AdminConfig         = authzconfig.AdminConfig
 	Duration         = authzconfig.Duration
 )
 

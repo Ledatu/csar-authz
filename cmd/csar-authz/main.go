@@ -213,6 +213,10 @@ func run(
 		return fmt.Errorf("syncing policy: %w", err)
 	}
 
+	if err := applyBootstrapAssignments(ctx, storeImpl, cfg, logger); err != nil {
+		return fmt.Errorf("applying bootstrap assignments: %w", err)
+	}
+
 	eng := engine.New(storeImpl)
 	srv := server.New(eng)
 
@@ -442,6 +446,24 @@ func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *
 	}
 
 	return s.SyncPolicy(ctx, roles, perms)
+}
+
+// applyBootstrapAssignments idempotently ensures that all bootstrap
+// assignments declared in config exist in the store. AssignRole uses
+// ON CONFLICT DO NOTHING, so this is safe to run on every startup.
+func applyBootstrapAssignments(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
+	for _, ba := range cfg.BootstrapAssignments {
+		if err := s.AssignRole(ctx, ba.Subject, ba.Role, ba.ScopeType, ba.ScopeID); err != nil {
+			return fmt.Errorf("assigning %q → %q (scope %s/%s): %w", ba.Subject, ba.Role, ba.ScopeType, ba.ScopeID, err)
+		}
+		logger.Info("bootstrap assignment ensured",
+			"subject", ba.Subject,
+			"role", ba.Role,
+			"scope_type", ba.ScopeType,
+			"scope_id", ba.ScopeID,
+		)
+	}
+	return nil
 }
 
 func applyOverrides(cfg *config.Config, o cliOverrides) {
