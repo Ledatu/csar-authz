@@ -226,7 +226,7 @@ func run(
 	// Interceptor chain: JWT (authn) → authz.
 	var interceptors []grpc.UnaryServerInterceptor
 	if cfg.Authn.Enabled {
-		validator, err := grpcjwt.NewValidator(&grpcjwt.Config{
+		grpcjwtCfg := &grpcjwt.Config{
 			JWKSURL:       cfg.Authn.JWKSURL,
 			PublicKeyFile: cfg.Authn.PublicKeyFile,
 			Issuer:        cfg.Authn.Issuer,
@@ -234,7 +234,22 @@ func run(
 			ClockSkew:     cfg.Authn.ClockSkew.Duration,
 			SubjectClaim:  cfg.Authn.SubjectClaim,
 			CacheTTL:      cfg.Authn.CacheTTL.Duration,
-		}, logger.With("component", "authn"))
+		}
+		if cfg.Authn.JWKSTLS.IsEnabled() {
+			tc, err := tlsx.NewClientTLSConfig(tlsx.ClientConfig{
+				CAFile:   cfg.Authn.JWKSTLS.ClientCAFile,
+				CertFile: cfg.Authn.JWKSTLS.CertFile,
+				KeyFile:  cfg.Authn.JWKSTLS.KeyFile,
+			})
+			if err != nil {
+				return fmt.Errorf("building JWKS TLS config: %w", err)
+			}
+			grpcjwtCfg.HTTPClient = &http.Client{
+				Transport: &http.Transport{TLSClientConfig: tc},
+				Timeout:   10 * time.Second,
+			}
+		}
+		validator, err := grpcjwt.NewValidator(grpcjwtCfg, logger.With("component", "authn"))
 		if err != nil {
 			return fmt.Errorf("initializing authn: %w", err)
 		}
