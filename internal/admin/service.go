@@ -57,8 +57,10 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.recordAudit(r, actor, "role.assign", "assignment", targetSubject+"/"+body.Role, "tenant", tenantID, nil); err != nil {
-		apierror.New("audit_error", http.StatusInternalServerError, "mutation succeeded but audit write failed").Write(w)
-		return
+		// Role grant already succeeded; do not fail the HTTP response so callers
+		// (e.g. campaigns) do not compensate against a live authz mutation.
+		h.logger.Error("svc assign role: audit write failed after successful role assignment",
+			"target", targetSubject, "role", body.Role, "tenant", tenantID, "error", err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
