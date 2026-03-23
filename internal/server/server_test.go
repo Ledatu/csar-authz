@@ -6,6 +6,7 @@ import (
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store/memory"
+	"github.com/ledatu/csar-core/gatewayctx"
 	pb "github.com/ledatu/csar-proto/csar/authz/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -86,6 +87,12 @@ func TestCheckAccess_Flow(t *testing.T) {
 	}
 	if resp.EnrichedHeaders["X-Authz-Decision"] != "allow" {
 		t.Errorf("expected X-Authz-Decision=allow, got %q", resp.EnrichedHeaders["X-Authz-Decision"])
+	}
+	if resp.EnrichedHeaders[gatewayctx.HeaderSubject] != "user-1" {
+		t.Errorf("expected %s=user-1, got %q", gatewayctx.HeaderSubject, resp.EnrichedHeaders[gatewayctx.HeaderSubject])
+	}
+	if resp.EnrichedHeaders[gatewayctx.HeaderAuthzResult] != "allow" {
+		t.Errorf("expected %s=allow, got %q", gatewayctx.HeaderAuthzResult, resp.EnrichedHeaders[gatewayctx.HeaderAuthzResult])
 	}
 
 	// CheckAccess: denied (wrong action).

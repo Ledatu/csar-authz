@@ -60,6 +60,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /admin/roles/{role}/permissions/{permId}", h.handleRemovePermission)
 
 	mux.HandleFunc("GET /admin/audit", h.handleListAudit)
+
+	h.RegisterServiceRoutes(mux)
 }
 
 // extractSubject reads the acting user's subject from the trusted gateway

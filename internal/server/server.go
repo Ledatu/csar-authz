@@ -7,6 +7,7 @@ import (
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
+	"github.com/ledatu/csar-core/gatewayctx"
 	"github.com/ledatu/csar-core/grpcjwt"
 	pb "github.com/ledatu/csar-proto/csar/authz/v1"
 	"google.golang.org/grpc/codes"
@@ -53,10 +54,22 @@ func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*
 		return nil, status.Errorf(codes.Internal, "authorization check failed: %v", err)
 	}
 
+	headers := engine.EnrichedHeaders(result)
+	// Let backends identify the subject without
+	// re-parsing router auth headers — the router merges these onto the upstream request.
+	if req.Subject != "" {
+		headers[gatewayctx.HeaderSubject] = req.Subject
+	}
+	if result.Allowed {
+		headers[gatewayctx.HeaderAuthzResult] = "allow"
+	} else {
+		headers[gatewayctx.HeaderAuthzResult] = "deny"
+	}
+
 	return &pb.CheckAccessResponse{
 		Allowed:         result.Allowed,
 		MatchedRoles:    result.MatchedRoles,
-		EnrichedHeaders: engine.EnrichedHeaders(result),
+		EnrichedHeaders: headers,
 	}, nil
 }
 
