@@ -283,33 +283,33 @@ func run(
 	}
 
 	// --- Health and metrics HTTP sidecar ---
-	healthMux := http.NewServeMux()
-	healthMux.Handle("/health", health.Handler(Version))
 	rc := health.NewReadinessChecker(Version, true)
+	rc.Register("grpc_server", health.TCPDialCheck(cfg.ListenAddr, time.Second))
 	if pgStore != nil {
 		pool := pgStore.Pool()
 		rc.Register("postgres", func() health.CheckStatus {
-			if err := pool.Ping(context.Background()); err != nil {
+			checkCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := pool.Ping(checkCtx); err != nil {
 				return health.CheckStatus{Status: "fail", Detail: err.Error()}
 			}
 			return health.CheckStatus{Status: "ok"}
 		})
 	}
-	healthMux.Handle("/readiness", rc.Handler())
-	healthMux.Handle("/metrics", observe.MetricsHandler(reg))
 
-	healthSrv, err := httpserver.New(&httpserver.Config{
-		Addr:         cfg.HealthAddr,
-		Handler:      healthMux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-	}, logger.With("component", "health"))
+	healthSidecar, err := health.NewSidecar(health.SidecarConfig{
+		Addr:      cfg.HealthAddr,
+		Version:   Version,
+		Readiness: rc,
+		Metrics:   observe.MetricsHandler(reg),
+		Logger:    logger.With("component", "health"),
+	})
 	if err != nil {
-		return fmt.Errorf("creating health server: %w", err)
+		return fmt.Errorf("creating health sidecar: %w", err)
 	}
 	go func() {
-		if err := healthSrv.ListenAndServe(); err != nil {
-			logger.Error("health server error", "error", err)
+		if err := healthSidecar.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("health sidecar error", "error", err)
 		}
 	}()
 	logger.Info("health/metrics sidecar started", "addr", cfg.HealthAddr)
@@ -430,6 +430,11 @@ func run(
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		sig := <-sigCh
 		logger.Info("shutting down", "signal", fmt.Sprintf("%v", sig))
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := healthSidecar.Shutdown(shutdownCtx); err != nil {
+			logger.Error("health sidecar shutdown error", "error", err)
+		}
 		grpcServer.GracefulStop()
 	}()
 
