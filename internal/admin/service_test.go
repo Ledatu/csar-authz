@@ -19,14 +19,10 @@ import (
 	"github.com/ledatu/csar-core/gatewayctx"
 )
 
-type failingAuditStore struct{}
+type failingAuditRecorder struct{}
 
-func (failingAuditStore) Record(context.Context, *audit.Event) error {
+func (failingAuditRecorder) Record(context.Context, *audit.Event) error {
 	return errors.New("audit write failed")
-}
-
-func (failingAuditStore) List(context.Context, *audit.ListFilter) (*audit.ListResult, error) {
-	return nil, errors.New("not implemented")
 }
 
 func reqSvcAssignRole(tenantID, targetSubject, role string) *http.Request {
@@ -46,7 +42,7 @@ func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 
 	eng := engine.New(s)
 	cfg := &authzconfig.AdminConfig{AuditRequired: true}
-	h := New(eng, failingAuditStore{}, slog.Default(), cfg)
+	h := New(eng, failingAuditRecorder{}, nil, slog.Default(), cfg)
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 
@@ -62,7 +58,7 @@ func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 func TestSvcAssignRole_AssignFailureReturns500(t *testing.T) {
 	s := memory.New()
 	eng := engine.New(s)
-	h := New(eng, nil, slog.Default(), &authzconfig.AdminConfig{})
+	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{})
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 

@@ -19,18 +19,20 @@ import (
 
 // Handler holds dependencies for admin HTTP endpoints.
 type Handler struct {
-	engine     *engine.Engine
-	auditStore audit.Store // nil when audit is not configured
-	logger     *slog.Logger
-	cfg        atomic.Pointer[authzconfig.AdminConfig]
+	engine        *engine.Engine
+	auditRecorder audit.Recorder // nil when audit emission is not configured
+	auditStore    audit.Store    // nil when audit querying is not configured
+	logger        *slog.Logger
+	cfg           atomic.Pointer[authzconfig.AdminConfig]
 }
 
 // New creates a Handler with all dependencies.
-func New(eng *engine.Engine, auditStore audit.Store, logger *slog.Logger, cfg *authzconfig.AdminConfig) *Handler {
+func New(eng *engine.Engine, auditRecorder audit.Recorder, auditStore audit.Store, logger *slog.Logger, cfg *authzconfig.AdminConfig) *Handler {
 	h := &Handler{
-		engine:     eng,
-		auditStore: auditStore,
-		logger:     logger,
+		engine:        eng,
+		auditRecorder: auditRecorder,
+		auditStore:    auditStore,
+		logger:        logger,
 	}
 	h.cfg.Store(cfg)
 	return h
@@ -93,7 +95,7 @@ func (h *Handler) requirePermission(r *http.Request, subject, permission, scopeT
 // a write failure is returned to the caller so the mutation can be failed.
 // Otherwise the failure is logged and swallowed (best-effort).
 func (h *Handler) recordAudit(r *http.Request, actor, action, targetType, targetID, scopeType, scopeID string, afterState json.RawMessage) error {
-	if h.auditStore == nil {
+	if h.auditRecorder == nil {
 		return nil
 	}
 	event := &audit.Event{
@@ -105,7 +107,7 @@ func (h *Handler) recordAudit(r *http.Request, actor, action, targetType, target
 		ScopeID:    scopeID,
 		AfterState: afterState,
 	}
-	if err := h.auditStore.Record(r.Context(), event); err != nil {
+	if err := h.auditRecorder.Record(r.Context(), event); err != nil {
 		if h.cfg.Load().AuditRequired {
 			h.logger.Error("required audit write failed", "action", action, "error", err)
 			return err

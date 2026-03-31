@@ -225,3 +225,15 @@ listen_addr: "${TEST_LISTEN}"
 		t.Fatalf("listen_addr = %q, want :7777", cfg.ListenAddr)
 	}
 }
+
+func TestLoadFromBytes_AuditValidation(t *testing.T) {
+	yaml := `
+audit:
+  router_base_url: "https://csar:8443/svc/audit"
+`
+
+	_, err := LoadFromBytes([]byte(yaml))
+	if err == nil {
+		t.Fatal("expected error for partially configured audit block")
+	}
+}

@@ -27,7 +27,7 @@ func setup(t *testing.T) *testEnv {
 	s := memory.New()
 	eng := engine.New(s)
 	cfg := &authzconfig.AdminConfig{}
-	h := New(eng, nil, slog.Default(), cfg)
+	h := New(eng, nil, nil, slog.Default(), cfg)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	return &testEnv{store: s, engine: eng, handler: h, mux: mux}

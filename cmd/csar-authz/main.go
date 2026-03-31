@@ -322,17 +322,21 @@ func run(
 				"the admin API uses mTLS to verify that requests originate from a trusted gateway")
 		}
 
-		var auditStore audit.Store
-		if pgStore != nil {
-			pgAudit := audit.NewPostgresStore(pgStore.Pool(), logger.With("component", "audit"))
-			if err := pgAudit.Migrate(ctx); err != nil {
-				return fmt.Errorf("running audit migrations: %w", err)
+		var (
+			auditClient   *audit.Client
+			auditRecorder audit.Recorder
+		)
+		if cfg.Audit.IsConfigured() {
+			auditClient, err = audit.NewRouterClient(&cfg.Audit, logger.With("component", "audit"))
+			if err != nil {
+				return fmt.Errorf("initializing audit client: %w", err)
 			}
-			auditStore = pgAudit
-			logger.Info("audit store initialized (shared postgres pool)")
+			auditRecorder = audit.NewClientRecorder(auditClient, "csar-authz")
+			defer func() { _ = auditClient.Close() }()
+			logger.Info("central audit client initialized", "base_url", cfg.Audit.RouterBaseURL)
 		}
 
-		adminHandler = admin.New(eng, auditStore, logger.With("component", "admin"), &cfg.Admin)
+		adminHandler = admin.New(eng, auditRecorder, nil, logger.With("component", "admin"), &cfg.Admin)
 
 		adminMux := http.NewServeMux()
 		adminHandler.RegisterRoutes(adminMux)
