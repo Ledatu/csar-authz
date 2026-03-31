@@ -10,10 +10,11 @@ import (
 )
 
 type roleResponse struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Parents     []string `json:"parents"`
-	CreatedAt   int64    `json:"created_at"`
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Parents     []string             `json:"parents"`
+	Permissions []permissionResponse `json:"permissions,omitempty"`
+	CreatedAt   int64                `json:"created_at"`
 }
 
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
@@ -43,10 +44,18 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 	resp := make([]roleResponse, len(roles))
 	for i, role := range roles {
+		perms, err := h.engine.ListRolePermissions(r.Context(), role.Name)
+		if err != nil {
+			h.logger.Error("failed to list role permissions", "role", role.Name, "error", err)
+			apierror.New("internal_error", http.StatusInternalServerError, "failed to list roles").Write(w)
+			return
+		}
+
 		resp[i] = roleResponse{
 			Name:        role.Name,
 			Description: role.Description,
 			Parents:     role.Parents,
+			Permissions: permissionsToResponse(perms),
 			CreatedAt:   role.CreatedAt.Unix(),
 		}
 	}

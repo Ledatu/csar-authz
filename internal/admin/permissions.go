@@ -20,6 +20,15 @@ type permissionResponse struct {
 	Action   string `json:"action"`
 }
 
+func permissionsToResponse(perms []*store.Permission) []permissionResponse {
+	resp := make([]permissionResponse, len(perms))
+	for i, p := range perms {
+		resp[i] = permissionResponse{ID: p.ID, Role: p.Role, Resource: p.Resource, Action: p.Action}
+	}
+
+	return resp
+}
+
 func (h *Handler) handleListRolePermissions(w http.ResponseWriter, r *http.Request) {
 	subject := extractSubject(r)
 	if subject == "" {
@@ -50,11 +59,7 @@ func (h *Handler) handleListRolePermissions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp := make([]permissionResponse, len(perms))
-	for i, p := range perms {
-		resp[i] = permissionResponse{ID: p.ID, Role: p.Role, Resource: p.Resource, Action: p.Action}
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, permissionsToResponse(perms))
 }
 
 func (h *Handler) handleAddPermission(w http.ResponseWriter, r *http.Request) {

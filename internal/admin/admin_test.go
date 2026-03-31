@@ -46,6 +46,18 @@ func must(t *testing.T, err error) {
 	}
 }
 
+func roleByName(t *testing.T, roles []roleResponse, name string) roleResponse {
+	t.Helper()
+	for _, role := range roles {
+		if role.Name == name {
+			return role
+		}
+	}
+
+	t.Fatalf("expected role %q in response", name)
+	return roleResponse{}
+}
+
 func setupPlatformAdmin(t *testing.T, env *testEnv, subject string) {
 	t.Helper()
 	ctx := context.Background()
@@ -98,6 +110,22 @@ func TestListRoles_TenantAdmin_WithTenantID(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp []roleResponse
+	must(t, json.NewDecoder(w.Body).Decode(&resp))
+
+	role := roleByName(t, resp, "tenant_admin")
+	if len(role.Permissions) == 0 {
+		t.Fatal("expected tenant_admin permissions in role list payload")
+	}
+
+	actions := make(map[string]struct{}, len(role.Permissions))
+	for _, perm := range role.Permissions {
+		actions[perm.Action] = struct{}{}
+	}
+	if _, ok := actions["tenant.roles.read"]; !ok {
+		t.Fatal("expected tenant.roles.read permission in role list payload")
 	}
 }
 
@@ -163,6 +191,22 @@ func TestListRoles_PlatformAdmin_NoTenantIDNeeded(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp []roleResponse
+	must(t, json.NewDecoder(w.Body).Decode(&resp))
+
+	role := roleByName(t, resp, "platform_admin")
+	if len(role.Permissions) == 0 {
+		t.Fatal("expected platform_admin permissions in role list payload")
+	}
+
+	actions := make(map[string]struct{}, len(role.Permissions))
+	for _, perm := range role.Permissions {
+		actions[perm.Action] = struct{}{}
+	}
+	if _, ok := actions["platform.roles.read"]; !ok {
+		t.Fatal("expected platform.roles.read permission in role list payload")
 	}
 }
 
