@@ -49,10 +49,12 @@ func must(t *testing.T, err error) {
 func setupPlatformAdmin(t *testing.T, env *testEnv, subject string) {
 	t.Helper()
 	ctx := context.Background()
-	must(t, env.store.CreateRole(ctx, &store.Role{Name: "platform_admin"}))
+	_ = env.store.CreateRole(ctx, &store.Role{Name: "platform_admin"})
 	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "admin", Action: "platform.roles.read"}))
 	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "admin", Action: "platform.roles.create"}))
 	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "admin", Action: "platform.roles.delete"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "admin", Action: "platform.roles.assign"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_admin", Resource: "admin", Action: "platform.roles.revoke"}))
 	must(t, env.store.AssignRole(ctx, subject, "platform_admin", "platform", ""))
 }
 
@@ -72,6 +74,16 @@ func setupTenantAdmin(t *testing.T, env *testEnv, subject, tenantID string) {
 	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "tenant_admin", Resource: "admin", Action: "tenant.roles.read"}))
 	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "tenant_admin", Resource: "admin", Action: "tenant.members.read"}))
 	must(t, env.store.AssignRole(ctx, subject, "tenant_admin", "tenant", tenantID))
+}
+
+func setupPlatformManager(t *testing.T, env *testEnv, subject string) {
+	t.Helper()
+	ctx := context.Background()
+	_ = env.store.CreateRole(ctx, &store.Role{Name: "platform_manager"})
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_manager", Resource: "admin", Action: "platform.roles.read"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_manager", Resource: "admin", Action: "platform.roles.assign"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "platform_manager", Resource: "admin", Action: "platform.roles.revoke"}))
+	must(t, env.store.AssignRole(ctx, subject, "platform_manager", "platform", ""))
 }
 
 // --- Bug A: tenant.roles.read scope fix ---

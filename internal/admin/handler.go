@@ -48,6 +48,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/me/capabilities", h.handleCapabilities)
 	mux.HandleFunc("GET /admin/me/tenants", h.handleMyTenants)
 
+	mux.HandleFunc("GET /admin/platform/members", h.handleListPlatformMembers)
+	mux.HandleFunc("POST /admin/platform/members/{subject}/roles", h.handleAssignPlatformRole)
+	mux.HandleFunc("DELETE /admin/platform/members/{subject}/roles/{role}", h.handleRevokePlatformRole)
+
 	mux.HandleFunc("GET /admin/tenants/{tenantId}/members", h.handleListMembers)
 	mux.HandleFunc("POST /admin/tenants/{tenantId}/members/{subject}/roles", h.handleAssignRole)
 	mux.HandleFunc("DELETE /admin/tenants/{tenantId}/members/{subject}/roles/{role}", h.handleRevokeRole)
