@@ -298,7 +298,7 @@ func run(
 	}
 
 	healthSidecar, err := health.NewSidecar(health.SidecarConfig{
-		Addr:      cfg.HealthAddr,
+		Addr:      cfg.ProbeSidecar.Addr,
 		Version:   Version,
 		Readiness: rc,
 		Metrics:   observe.MetricsHandler(reg),
@@ -312,7 +312,7 @@ func run(
 			logger.Error("health sidecar error", "error", err)
 		}
 	}()
-	logger.Info("health/metrics sidecar started", "addr", cfg.HealthAddr)
+	logger.Info("health/metrics sidecar started", "addr", cfg.ProbeSidecar.Addr)
 
 	// --- Admin HTTP API ---
 	var adminHandler *admin.Handler
