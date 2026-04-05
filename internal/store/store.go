@@ -17,6 +17,9 @@ var (
 	ErrRoleInUse     = errors.New("role is assigned to subjects")
 )
 
+// MaxRoleHierarchyDepth prevents runaway traversal in cyclic role graphs.
+const MaxRoleHierarchyDepth = 32
+
 // Role represents a named authorization role with optional parent hierarchy.
 type Role struct {
 	Name        string
@@ -65,6 +68,11 @@ type Store interface {
 	// ListRoles returns all defined roles.
 	ListRoles(ctx context.Context) ([]*Role, error)
 
+	// ListRoleClosure returns the transitive closure for each requested direct role.
+	// Each closure is ordered as direct role first, then reachable ancestors.
+	// Missing roles are skipped without error.
+	ListRoleClosure(ctx context.Context, roles []string) (map[string][]string, error)
+
 	// --- Subject-Role Assignments ---
 
 	// AssignRole grants a role to a subject within a scope. No-op if already assigned.
@@ -76,6 +84,9 @@ type Store interface {
 
 	// GetSubjectRoles returns all directly assigned role names for a subject within a scope.
 	GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error)
+
+	// ListSubjectAssignments returns all direct assignments for a subject across scopes.
+	ListSubjectAssignments(ctx context.Context, subject string) ([]ScopedAssignment, error)
 
 	// --- Scope Queries ---
 
@@ -117,4 +128,7 @@ type Store interface {
 
 	// GetRolePermissions returns all permissions for a given role.
 	GetRolePermissions(ctx context.Context, role string) ([]*Permission, error)
+
+	// ListPermissionsForRoles returns permissions for the provided roles grouped by role.
+	ListPermissionsForRoles(ctx context.Context, roles []string) (map[string][]*Permission, error)
 }

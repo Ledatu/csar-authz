@@ -8,6 +8,35 @@ import (
 	"github.com/ledatu/csar-authz/internal/store/memory"
 )
 
+type countingStore struct {
+	*memory.Store
+
+	getRoleCalls                 int
+	getRolePermissionsCalls      int
+	listRoleClosureCalls         int
+	listPermissionsForRolesCalls int
+}
+
+func (s *countingStore) GetRole(ctx context.Context, name string) (*store.Role, error) {
+	s.getRoleCalls++
+	return s.Store.GetRole(ctx, name)
+}
+
+func (s *countingStore) GetRolePermissions(ctx context.Context, role string) ([]*store.Permission, error) {
+	s.getRolePermissionsCalls++
+	return s.Store.GetRolePermissions(ctx, role)
+}
+
+func (s *countingStore) ListRoleClosure(ctx context.Context, roles []string) (map[string][]string, error) {
+	s.listRoleClosureCalls++
+	return s.Store.ListRoleClosure(ctx, roles)
+}
+
+func (s *countingStore) ListPermissionsForRoles(ctx context.Context, roles []string) (map[string][]*store.Permission, error) {
+	s.listPermissionsForRolesCalls++
+	return s.Store.ListPermissionsForRoles(ctx, roles)
+}
+
 // setupTestEngine creates an engine with a memory store and common test data.
 func setupTestEngine(t *testing.T) (*Engine, context.Context) {
 	t.Helper()
@@ -139,6 +168,38 @@ func TestCheckAccess_DeepHierarchy(t *testing.T) {
 	}
 	if len(result.EffectiveRoles) != 4 {
 		t.Errorf("expected 4 effective roles, got %d: %v", len(result.EffectiveRoles), result.EffectiveRoles)
+	}
+}
+
+func TestCheckAccess_UsesBulkRoleClosureAndPermissions(t *testing.T) {
+	backing := memory.New()
+	counting := &countingStore{Store: backing}
+	e := New(counting)
+	ctx := context.Background()
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "viewer"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "viewer", Resource: "/api/**", Action: "GET"})
+	_ = e.CreateRole(ctx, &store.Role{Name: "editor", Parents: []string{"viewer"}})
+	_ = e.AssignRole(ctx, "user-1", "editor", "platform", "")
+
+	result, err := e.CheckAccess(ctx, "user-1", "platform", "", "/api/v1/users", "GET")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatal("expected allowed")
+	}
+	if counting.listRoleClosureCalls != 1 {
+		t.Fatalf("expected one role-closure lookup, got %d", counting.listRoleClosureCalls)
+	}
+	if counting.listPermissionsForRolesCalls != 1 {
+		t.Fatalf("expected one bulk permission lookup, got %d", counting.listPermissionsForRolesCalls)
+	}
+	if counting.getRoleCalls != 0 {
+		t.Fatalf("expected no per-role reads, got %d", counting.getRoleCalls)
+	}
+	if counting.getRolePermissionsCalls != 0 {
+		t.Fatalf("expected no per-role permission lookups, got %d", counting.getRolePermissionsCalls)
 	}
 }
 

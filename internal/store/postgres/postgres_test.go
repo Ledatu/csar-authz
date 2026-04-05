@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/ledatu/csar-authz/internal/store"
@@ -169,5 +170,133 @@ func TestSyncPolicy_EmptyRoleList_PG(t *testing.T) {
 	aliceRoles, _ := s.GetSubjectRoles(ctx, "alice", "platform", "")
 	if len(aliceRoles) != 0 {
 		t.Fatalf("alice roles = %v, want []", aliceRoles)
+	}
+}
+
+func TestListSubjectAssignments_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{
+		{Name: "platform_admin"},
+		{Name: "tenant_admin"},
+	}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+	_ = s.AssignRole(ctx, "alice", "platform_admin", "platform", "")
+	_ = s.AssignRole(ctx, "alice", "tenant_admin", "tenant", "acme")
+
+	assignments, err := s.ListSubjectAssignments(ctx, "alice")
+	if err != nil {
+		t.Fatalf("ListSubjectAssignments: %v", err)
+	}
+	if len(assignments) != 2 {
+		t.Fatalf("expected 2 assignments, got %d", len(assignments))
+	}
+	if assignments[0].ScopeType != "platform" || assignments[0].Role != "platform_admin" {
+		t.Fatalf("unexpected first assignment: %+v", assignments[0])
+	}
+	if assignments[1].ScopeType != "tenant" || assignments[1].ScopeID != "acme" || assignments[1].Role != "tenant_admin" {
+		t.Fatalf("unexpected second assignment: %+v", assignments[1])
+	}
+}
+
+func TestListRoleClosure_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{
+		{Name: "base"},
+		{Name: "level1", Parents: []string{"base"}},
+		{Name: "level2", Parents: []string{"level1"}},
+		{Name: "level3", Parents: []string{"level2"}},
+	}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	closure, err := s.ListRoleClosure(ctx, []string{"level3"})
+	if err != nil {
+		t.Fatalf("ListRoleClosure: %v", err)
+	}
+	want := []string{"level3", "level2", "level1", "base"}
+	if !reflect.DeepEqual(closure["level3"], want) {
+		t.Fatalf("level3 closure = %v, want %v", closure["level3"], want)
+	}
+}
+
+func TestListRoleClosure_MultiSeedMissingAndDedupe_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{
+		{Name: "viewer"},
+		{Name: "editor", Parents: []string{"viewer"}},
+		{Name: "admin", Parents: []string{"viewer"}},
+	}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	closure, err := s.ListRoleClosure(ctx, []string{"editor", "missing", "admin", "editor"})
+	if err != nil {
+		t.Fatalf("ListRoleClosure: %v", err)
+	}
+	if !reflect.DeepEqual(closure["editor"], []string{"editor", "viewer"}) {
+		t.Fatalf("editor closure = %v", closure["editor"])
+	}
+	if !reflect.DeepEqual(closure["admin"], []string{"admin", "viewer"}) {
+		t.Fatalf("admin closure = %v", closure["admin"])
+	}
+	if got := closure["missing"]; len(got) != 0 {
+		t.Fatalf("missing closure = %v, want empty", got)
+	}
+	if len(closure) != 3 {
+		t.Fatalf("expected closures for 3 unique seeds, got %d", len(closure))
+	}
+}
+
+func TestListRoleClosure_Cycle_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{
+		{Name: "role_a", Parents: []string{"role_b"}},
+		{Name: "role_b", Parents: []string{"role_a"}},
+	}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	closure, err := s.ListRoleClosure(ctx, []string{"role_a"})
+	if err != nil {
+		t.Fatalf("ListRoleClosure: %v", err)
+	}
+	want := []string{"role_a", "role_b"}
+	if !reflect.DeepEqual(closure["role_a"], want) {
+		t.Fatalf("role_a closure = %v, want %v", closure["role_a"], want)
+	}
+}
+
+func TestListPermissionsForRoles_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{
+		{Name: "editor"},
+		{Name: "viewer"},
+	}, []*store.Permission{
+		{Role: "editor", Resource: "/edit", Action: "POST"},
+		{Role: "viewer", Resource: "/view", Action: "GET"},
+	}); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+
+	perms, err := s.ListPermissionsForRoles(ctx, []string{"viewer", "editor", "viewer"})
+	if err != nil {
+		t.Fatalf("ListPermissionsForRoles: %v", err)
+	}
+	if len(perms["editor"]) != 1 || perms["editor"][0].Action != "POST" {
+		t.Fatalf("unexpected editor permissions: %+v", perms["editor"])
+	}
+	if len(perms["viewer"]) != 1 || perms["viewer"][0].Action != "GET" {
+		t.Fatalf("unexpected viewer permissions: %+v", perms["viewer"])
 	}
 }

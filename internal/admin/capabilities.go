@@ -1,11 +1,6 @@
 package admin
 
-import (
-	"context"
-	"net/http"
-
-	"github.com/ledatu/csar-authz/internal/engine"
-)
+import "net/http"
 
 var platformCapabilities = []string{
 	"platform.roles.read",
@@ -38,32 +33,19 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-
-	scopes, err := h.engine.ListSubjectScopes(ctx, subject)
+	resolved, err := h.resolveAdminAccess(ctx, subject)
 	if err != nil {
-		h.logger.Error("failed to list subject scopes", "subject", subject, "error", err)
-		http.Error(w, "failed to fetch scopes", http.StatusInternalServerError)
+		h.logger.Error("failed to resolve capabilities", "subject", subject, "error", err)
+		http.Error(w, "failed to fetch capabilities", http.StatusInternalServerError)
 		return
 	}
 
 	resp := capabilitiesResponse{
-		Subject:            subject,
-		TenantCapabilities: make(map[string][]string),
+		Subject:              subject,
+		PlatformAdmin:        resolved.platformAdmin,
+		PlatformCapabilities: resolved.platformCapabilities,
+		TenantCapabilities:   resolved.tenantCapabilities,
 	}
-
-	for _, scope := range scopes {
-		perms := h.collectAdminPermissions(ctx, subject, scope.ScopeType, scope.ScopeID)
-		if len(perms) == 0 {
-			continue
-		}
-		if scope.ScopeType == "platform" {
-			resp.PlatformCapabilities = perms
-		} else if scope.ScopeType == "tenant" && scope.ScopeID != "" {
-			resp.TenantCapabilities[scope.ScopeID] = perms
-		}
-	}
-
-	resp.PlatformAdmin = len(resp.PlatformCapabilities) > 0
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -81,9 +63,14 @@ func (h *Handler) handleMyTenants(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	resolved, err := h.resolveAdminAccess(ctx, subject)
+	if err != nil {
+		h.logger.Error("failed to resolve tenant access", "subject", subject, "error", err)
+		http.Error(w, "failed to fetch tenants", http.StatusInternalServerError)
+		return
+	}
 
-	isPlatformAdmin := len(h.collectAdminPermissions(ctx, subject, "platform", "")) > 0
-	if isPlatformAdmin {
+	if resolved.platformAdmin {
 		tenants, err := h.engine.ListTenants(ctx)
 		if err != nil {
 			h.logger.Error("failed to list all tenants", "subject", subject, "error", err)
@@ -94,58 +81,7 @@ func (h *Handler) handleMyTenants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scopes, err := h.engine.ListSubjectScopes(ctx, subject)
-	if err != nil {
-		h.logger.Error("failed to list subject scopes", "subject", subject, "error", err)
-		http.Error(w, "failed to fetch tenants", http.StatusInternalServerError)
-		return
-	}
-
-	var tenants []string
-	for _, scope := range scopes {
-		if scope.ScopeType == "tenant" && scope.ScopeID != "" {
-			tenants = append(tenants, scope.ScopeID)
-		}
-	}
-
-	writeJSON(w, http.StatusOK, myTenantsResponse{Subject: subject, Tenants: tenants})
-}
-
-// collectAdminPermissions resolves all admin-resource permissions for a subject in a scope.
-func (h *Handler) collectAdminPermissions(ctx context.Context, subject, scopeType, scopeID string) []string {
-	roles, err := h.engine.ListSubjectRoles(ctx, subject, scopeType, scopeID)
-	if err != nil {
-		h.logger.Warn("failed to list roles for capabilities", "subject", subject, "error", err)
-		return nil
-	}
-
-	effectiveRoles, err := h.engine.ExpandRoles(ctx, roles)
-	if err != nil {
-		h.logger.Warn("failed to expand roles", "subject", subject, "error", err)
-		return nil
-	}
-
-	seen := make(map[string]struct{})
-	var perms []string
-	for _, roleName := range effectiveRoles {
-		rolePerms, err := h.engine.ListRolePermissions(ctx, roleName)
-		if err != nil {
-			continue
-		}
-		for _, p := range rolePerms {
-			if !engine.MatchResource(p.Resource, "admin") {
-				continue
-			}
-			for _, action := range expandAdminActions(scopeType, p.Action) {
-				if _, dup := seen[action]; dup {
-					continue
-				}
-				seen[action] = struct{}{}
-				perms = append(perms, action)
-			}
-		}
-	}
-	return perms
+	writeJSON(w, http.StatusOK, myTenantsResponse{Subject: subject, Tenants: resolved.directTenants})
 }
 
 func expandAdminActions(scopeType, action string) []string {

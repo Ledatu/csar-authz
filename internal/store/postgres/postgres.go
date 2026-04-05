@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -167,6 +168,74 @@ func (s *Store) ListRoles(ctx context.Context) ([]*store.Role, error) {
 	return roles, nil
 }
 
+func (s *Store) ListRoleClosure(ctx context.Context, roles []string) (map[string][]string, error) {
+	closureByRole := make(map[string][]string, len(roles))
+	if len(roles) == 0 {
+		return closureByRole, nil
+	}
+
+	seedRoles := make([]string, 0, len(roles))
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		if _, ok := seen[role]; ok {
+			continue
+		}
+		seen[role] = struct{}{}
+		seedRoles = append(seedRoles, role)
+		closureByRole[role] = nil
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`WITH RECURSIVE seed(seed_role, seed_ord) AS (
+			 SELECT role_name, ord::bigint
+			 FROM unnest($1::text[]) WITH ORDINALITY AS s(role_name, ord)
+		 ),
+		 closure(seed_role, seed_ord, role_name, depth, path) AS (
+			 SELECT seed.seed_role, seed.seed_ord, roles.name, 0, ARRAY[roles.name]::text[]
+			 FROM seed
+			 JOIN roles ON roles.name = seed.seed_role
+			 UNION ALL
+			 SELECT closure.seed_role,
+			        closure.seed_ord,
+			        role_parents.parent_name,
+			        closure.depth + 1,
+			        closure.path || role_parents.parent_name
+			 FROM closure
+			 JOIN role_parents ON role_parents.role_name = closure.role_name
+			 WHERE closure.depth < $2
+			   AND NOT role_parents.parent_name = ANY(closure.path)
+		 ),
+		 dedup AS (
+			 SELECT DISTINCT ON (seed_role, role_name)
+			        seed_role, seed_ord, role_name, depth
+			 FROM closure
+			 ORDER BY seed_role, role_name, depth
+		 )
+		 SELECT seed_role, role_name
+		 FROM dedup
+		 ORDER BY seed_ord, depth, role_name`,
+		seedRoles, store.MaxRoleHierarchyDepth,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing role closure: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var seedRole string
+		var roleName string
+		if err := rows.Scan(&seedRole, &roleName); err != nil {
+			return nil, fmt.Errorf("scanning role closure: %w", err)
+		}
+		closureByRole[seedRole] = append(closureByRole[seedRole], roleName)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return closureByRole, nil
+}
+
 // --- Subject-Role Assignments ---
 
 func (s *Store) AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
@@ -219,6 +288,30 @@ func (s *Store) GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID
 		roles = append(roles, role)
 	}
 	return roles, rows.Err()
+}
+
+func (s *Store) ListSubjectAssignments(ctx context.Context, subject string) ([]store.ScopedAssignment, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT subject, role, scope_type, scope_id
+		 FROM assignments
+		 WHERE subject = $1
+		 ORDER BY scope_type, scope_id, role`,
+		subject,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing subject assignments: %w", err)
+	}
+	defer rows.Close()
+
+	var assignments []store.ScopedAssignment
+	for rows.Next() {
+		var a store.ScopedAssignment
+		if err := rows.Scan(&a.Subject, &a.Role, &a.ScopeType, &a.ScopeID); err != nil {
+			return nil, fmt.Errorf("scanning assignment: %w", err)
+		}
+		assignments = append(assignments, a)
+	}
+	return assignments, rows.Err()
 }
 
 // --- Scope Queries ---
@@ -368,6 +461,55 @@ func (s *Store) GetRolePermissions(ctx context.Context, role string) ([]*store.P
 		perms = append(perms, p)
 	}
 	return perms, rows.Err()
+}
+
+func (s *Store) ListPermissionsForRoles(ctx context.Context, roles []string) (map[string][]*store.Permission, error) {
+	grouped := make(map[string][]*store.Permission)
+	if len(roles) == 0 {
+		return grouped, nil
+	}
+
+	roleSet := make([]string, 0, len(roles))
+	seen := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		if _, ok := seen[role]; ok {
+			continue
+		}
+		seen[role] = struct{}{}
+		roleSet = append(roleSet, role)
+	}
+	slices.Sort(roleSet)
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, role, resource, action
+		 FROM permissions
+		 WHERE role = ANY($1::text[])
+		 ORDER BY role, id`,
+		roleSet,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing permissions for roles: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		p := &store.Permission{}
+		if err := rows.Scan(&p.ID, &p.Role, &p.Resource, &p.Action); err != nil {
+			return nil, fmt.Errorf("scanning permission: %w", err)
+		}
+		grouped[p.Role] = append(grouped[p.Role], p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for _, role := range roleSet {
+		if _, ok := grouped[role]; !ok {
+			grouped[role] = nil
+		}
+	}
+
+	return grouped, nil
 }
 
 // --- Bulk Operations ---

@@ -268,6 +268,68 @@ func (s *Store) ListRoles(_ context.Context) ([]*store.Role, error) {
 	return result, nil
 }
 
+// ListRoleClosure returns the transitive closure for each requested direct role.
+func (s *Store) ListRoleClosure(_ context.Context, roles []string) (map[string][]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	closureByRole := make(map[string][]string, len(roles))
+	if len(roles) == 0 {
+		return closureByRole, nil
+	}
+
+	memo := make(map[string][]string, len(s.roles))
+	var expand func(roleName string, depth int, stack map[string]struct{}) []string
+	expand = func(roleName string, depth int, stack map[string]struct{}) []string {
+		if depth > store.MaxRoleHierarchyDepth {
+			return nil
+		}
+		if stack != nil {
+			if _, ok := stack[roleName]; ok {
+				return nil
+			}
+		}
+		if cached, ok := memo[roleName]; ok {
+			return cached
+		}
+
+		role, ok := s.roles[roleName]
+		if !ok {
+			return nil
+		}
+
+		if stack == nil {
+			stack = make(map[string]struct{})
+		}
+		stack[roleName] = struct{}{}
+		defer delete(stack, roleName)
+
+		expanded := []string{roleName}
+		seen := map[string]struct{}{roleName: {}}
+		for _, parent := range role.Parents {
+			for _, expandedParent := range expand(parent, depth+1, stack) {
+				if _, ok := seen[expandedParent]; ok {
+					continue
+				}
+				seen[expandedParent] = struct{}{}
+				expanded = append(expanded, expandedParent)
+			}
+		}
+
+		memo[roleName] = slices.Clone(expanded)
+		return memo[roleName]
+	}
+
+	for _, roleName := range roles {
+		if _, ok := closureByRole[roleName]; ok {
+			continue
+		}
+		closureByRole[roleName] = slices.Clone(expand(roleName, 0, nil))
+	}
+
+	return closureByRole, nil
+}
+
 // AssignRole grants a role to a subject within a scope.
 func (s *Store) AssignRole(_ context.Context, subject, role, scopeType, scopeID string) error {
 	s.mu.Lock()
@@ -316,6 +378,37 @@ func (s *Store) GetSubjectRoles(_ context.Context, subject, scopeType, scopeID s
 		result = append(result, r)
 	}
 	slices.Sort(result)
+	return result, nil
+}
+
+// ListSubjectAssignments returns all direct assignments for a subject across scopes.
+func (s *Store) ListSubjectAssignments(_ context.Context, subject string) ([]store.ScopedAssignment, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var result []store.ScopedAssignment
+	for key, roles := range s.assignments {
+		if key.Subject != subject {
+			continue
+		}
+		for role := range roles {
+			result = append(result, store.ScopedAssignment{
+				Subject:   key.Subject,
+				Role:      role,
+				ScopeType: key.ScopeType,
+				ScopeID:   key.ScopeID,
+			})
+		}
+	}
+	slices.SortFunc(result, func(a, b store.ScopedAssignment) int {
+		if c := cmp.Compare(a.ScopeType, b.ScopeType); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.ScopeID, b.ScopeID); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Role, b.Role)
+	})
 	return result, nil
 }
 
@@ -487,4 +580,26 @@ func (s *Store) GetRolePermissions(_ context.Context, role string) ([]*store.Per
 		result[i] = &cp
 	}
 	return result, nil
+}
+
+// ListPermissionsForRoles returns permissions for the provided roles grouped by role.
+func (s *Store) ListPermissionsForRoles(_ context.Context, roles []string) (map[string][]*store.Permission, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	grouped := make(map[string][]*store.Permission, len(roles))
+	for _, role := range roles {
+		if _, ok := grouped[role]; ok {
+			continue
+		}
+		perms := s.permissions[role]
+		copies := make([]*store.Permission, len(perms))
+		for i, p := range perms {
+			cp := *p
+			copies[i] = &cp
+		}
+		grouped[role] = copies
+	}
+
+	return grouped, nil
 }

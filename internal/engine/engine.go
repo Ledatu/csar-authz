@@ -12,9 +12,6 @@ import (
 	"github.com/ledatu/csar-authz/internal/store"
 )
 
-// maxHierarchyDepth prevents infinite loops in cyclic role hierarchies.
-const maxHierarchyDepth = 32
-
 // Result holds the outcome of an access check.
 type Result struct {
 	Allowed        bool
@@ -67,16 +64,19 @@ func (e *Engine) CheckAccess(ctx context.Context, subject, scopeType, scopeID, r
 	if err != nil {
 		return nil, err
 	}
+	if len(effectiveRoles) == 0 {
+		return &Result{Allowed: false}, nil
+	}
+
+	permissionsByRole, err := e.store.ListPermissionsForRoles(ctx, effectiveRoles)
+	if err != nil {
+		return nil, err
+	}
 
 	// 4. Check permissions for each effective role.
 	var matchedRoles []string
 	for _, role := range effectiveRoles {
-		perms, err := e.store.GetRolePermissions(ctx, role)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, perm := range perms {
+		for _, perm := range permissionsByRole[role] {
 			if MatchResource(perm.Resource, resource) && MatchAction(perm.Action, action) {
 				matchedRoles = append(matchedRoles, role)
 				break
@@ -110,42 +110,25 @@ func mergeUnique(a, b []string) []string {
 	return result
 }
 
-// expandRoles resolves a list of role names into the full set of effective roles,
-// traversing the parent hierarchy with cycle detection.
+// expandRoles resolves a list of role names into the full set of effective roles
+// using the store's batched closure lookup.
 func (e *Engine) expandRoles(ctx context.Context, roles []string) ([]string, error) {
-	visited := make(map[string]struct{})
-	var result []string
+	closureByRole, err := e.store.ListRoleClosure(ctx, roles)
+	if err != nil {
+		return nil, err
+	}
 
-	var walk func(name string, depth int) error
-	walk = func(name string, depth int) error {
-		if depth > maxHierarchyDepth {
-			return nil // stop at max depth to prevent runaway
-		}
-		if _, seen := visited[name]; seen {
-			return nil
-		}
-		visited[name] = struct{}{}
-		result = append(result, name)
-
-		role, err := e.store.GetRole(ctx, name)
-		if err != nil {
-			return nil // role might have been deleted concurrently; skip
-		}
-
-		for _, parent := range role.Parents {
-			if err := walk(parent, depth+1); err != nil {
-				return err
+	seen := make(map[string]struct{}, len(roles))
+	result := make([]string, 0, len(roles))
+	for _, role := range roles {
+		for _, expandedRole := range closureByRole[role] {
+			if _, ok := seen[expandedRole]; ok {
+				continue
 			}
-		}
-		return nil
-	}
-
-	for _, r := range roles {
-		if err := walk(r, 0); err != nil {
-			return nil, err
+			seen[expandedRole] = struct{}{}
+			result = append(result, expandedRole)
 		}
 	}
-
 	return result, nil
 }
 
@@ -192,6 +175,11 @@ func (e *Engine) ListRoles(ctx context.Context) ([]*store.Role, error) {
 	return e.store.ListRoles(ctx)
 }
 
+// ListRoleClosure delegates to the store.
+func (e *Engine) ListRoleClosure(ctx context.Context, roles []string) (map[string][]string, error) {
+	return e.store.ListRoleClosure(ctx, roles)
+}
+
 // AssignRole delegates to the store.
 func (e *Engine) AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
 	return e.store.AssignRole(ctx, subject, role, scopeType, scopeID)
@@ -205,6 +193,11 @@ func (e *Engine) RevokeRole(ctx context.Context, subject, role, scopeType, scope
 // ListSubjectRoles delegates to the store.
 func (e *Engine) ListSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error) {
 	return e.store.GetSubjectRoles(ctx, subject, scopeType, scopeID)
+}
+
+// ListSubjectAssignments delegates to the store.
+func (e *Engine) ListSubjectAssignments(ctx context.Context, subject string) ([]store.ScopedAssignment, error) {
+	return e.store.ListSubjectAssignments(ctx, subject)
 }
 
 // ExpandRoles resolves a list of role names into the full set of effective roles
@@ -246,4 +239,9 @@ func (e *Engine) RemovePermission(ctx context.Context, id string) error {
 // ListRolePermissions delegates to the store.
 func (e *Engine) ListRolePermissions(ctx context.Context, role string) ([]*store.Permission, error) {
 	return e.store.GetRolePermissions(ctx, role)
+}
+
+// ListPermissionsForRoles delegates to the store.
+func (e *Engine) ListPermissionsForRoles(ctx context.Context, roles []string) (map[string][]*store.Permission, error) {
+	return e.store.ListPermissionsForRoles(ctx, roles)
 }

@@ -42,20 +42,25 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	roleNames := make([]string, 0, len(roles))
+	for _, role := range roles {
+		roleNames = append(roleNames, role.Name)
+	}
+
+	permissionsByRole, err := h.engine.ListPermissionsForRoles(r.Context(), roleNames)
+	if err != nil {
+		h.logger.Error("failed to list role permissions", "error", err)
+		apierror.New("internal_error", http.StatusInternalServerError, "failed to list roles").Write(w)
+		return
+	}
+
 	resp := make([]roleResponse, len(roles))
 	for i, role := range roles {
-		perms, err := h.engine.ListRolePermissions(r.Context(), role.Name)
-		if err != nil {
-			h.logger.Error("failed to list role permissions", "role", role.Name, "error", err)
-			apierror.New("internal_error", http.StatusInternalServerError, "failed to list roles").Write(w)
-			return
-		}
-
 		resp[i] = roleResponse{
 			Name:        role.Name,
 			Description: role.Description,
 			Parents:     role.Parents,
-			Permissions: permissionsToResponse(perms),
+			Permissions: permissionsToResponse(permissionsByRole[role.Name]),
 			CreatedAt:   role.CreatedAt.Unix(),
 		}
 	}

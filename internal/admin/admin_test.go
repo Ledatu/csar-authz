@@ -25,12 +25,17 @@ type testEnv struct {
 func setup(t *testing.T) *testEnv {
 	t.Helper()
 	s := memory.New()
-	eng := engine.New(s)
+	return setupWithStore(t, s, s)
+}
+
+func setupWithStore(t *testing.T, backing *memory.Store, storage store.Store) *testEnv {
+	t.Helper()
+	eng := engine.New(storage)
 	cfg := &authzconfig.AdminConfig{}
 	h := New(eng, nil, nil, slog.Default(), cfg)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
-	return &testEnv{store: s, engine: eng, handler: h, mux: mux}
+	return &testEnv{store: backing, engine: eng, handler: h, mux: mux}
 }
 
 func reqWithSubject(method, path, subject string) *http.Request {
@@ -56,6 +61,59 @@ func roleByName(t *testing.T, roles []roleResponse, name string) roleResponse {
 
 	t.Fatalf("expected role %q in response", name)
 	return roleResponse{}
+}
+
+type countingStore struct {
+	*memory.Store
+
+	listRolesCalls               int
+	listRoleClosureCalls         int
+	getRoleCalls                 int
+	getSubjectRolesCalls         int
+	listSubjectScopesCalls       int
+	getRolePermissionsCalls      int
+	listSubjectAssignmentsCall   int
+	listPermissionsForRolesCalls int
+}
+
+func (s *countingStore) ListRoles(ctx context.Context) ([]*store.Role, error) {
+	s.listRolesCalls++
+	return s.Store.ListRoles(ctx)
+}
+
+func (s *countingStore) ListRoleClosure(ctx context.Context, roles []string) (map[string][]string, error) {
+	s.listRoleClosureCalls++
+	return s.Store.ListRoleClosure(ctx, roles)
+}
+
+func (s *countingStore) GetRole(ctx context.Context, name string) (*store.Role, error) {
+	s.getRoleCalls++
+	return s.Store.GetRole(ctx, name)
+}
+
+func (s *countingStore) GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error) {
+	s.getSubjectRolesCalls++
+	return s.Store.GetSubjectRoles(ctx, subject, scopeType, scopeID)
+}
+
+func (s *countingStore) ListSubjectScopes(ctx context.Context, subject string) ([]store.SubjectScope, error) {
+	s.listSubjectScopesCalls++
+	return s.Store.ListSubjectScopes(ctx, subject)
+}
+
+func (s *countingStore) GetRolePermissions(ctx context.Context, role string) ([]*store.Permission, error) {
+	s.getRolePermissionsCalls++
+	return s.Store.GetRolePermissions(ctx, role)
+}
+
+func (s *countingStore) ListSubjectAssignments(ctx context.Context, subject string) ([]store.ScopedAssignment, error) {
+	s.listSubjectAssignmentsCall++
+	return s.Store.ListSubjectAssignments(ctx, subject)
+}
+
+func (s *countingStore) ListPermissionsForRoles(ctx context.Context, roles []string) (map[string][]*store.Permission, error) {
+	s.listPermissionsForRolesCalls++
+	return s.Store.ListPermissionsForRoles(ctx, roles)
 }
 
 func setupPlatformAdmin(t *testing.T, env *testEnv, subject string) {
@@ -289,6 +347,122 @@ func TestCapabilities_WildcardPlatformAdmin_ExpandsCapabilities(t *testing.T) {
 	}
 }
 
+func TestCapabilities_UsesBulkLookupPaths(t *testing.T) {
+	backing := memory.New()
+	counting := &countingStore{Store: backing}
+	env := setupWithStore(t, backing, counting)
+	ctx := context.Background()
+
+	setupPlatformAdmin(t, env, "root")
+	must(t, env.store.CreateRole(ctx, &store.Role{Name: "tenant_admin", Parents: []string{"platform_admin"}}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "tenant_admin", Resource: "admin", Action: "tenant.members.read"}))
+	must(t, env.store.AssignRole(ctx, "root", "tenant_admin", "tenant", "acme"))
+
+	r := reqWithSubject("GET", "/admin/me/capabilities", "root")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if counting.listSubjectAssignmentsCall == 0 {
+		t.Fatal("expected bulk subject assignment lookup")
+	}
+	if counting.listPermissionsForRolesCalls == 0 {
+		t.Fatal("expected bulk permissions lookup")
+	}
+	if counting.listRoleClosureCalls == 0 {
+		t.Fatal("expected shared role-closure lookup")
+	}
+	if counting.listRolesCalls != 0 {
+		t.Fatalf("expected no full role catalog reads, got %d", counting.listRolesCalls)
+	}
+	if counting.getRoleCalls != 0 {
+		t.Fatalf("expected no per-role reads, got %d", counting.getRoleCalls)
+	}
+	if counting.getSubjectRolesCalls != 0 {
+		t.Fatalf("expected no per-scope role lookups, got %d", counting.getSubjectRolesCalls)
+	}
+	if counting.listSubjectScopesCalls != 0 {
+		t.Fatalf("expected no subject scope lookups, got %d", counting.listSubjectScopesCalls)
+	}
+	if counting.getRolePermissionsCalls != 0 {
+		t.Fatalf("expected no per-role permission lookups, got %d", counting.getRolePermissionsCalls)
+	}
+}
+
+func TestCapabilities_NoAssignments_SkipsRoleCatalogRead(t *testing.T) {
+	backing := memory.New()
+	counting := &countingStore{Store: backing}
+	env := setupWithStore(t, backing, counting)
+
+	r := reqWithSubject("GET", "/admin/me/capabilities", "nobody")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if counting.listSubjectAssignmentsCall != 1 {
+		t.Fatalf("expected one assignment lookup, got %d", counting.listSubjectAssignmentsCall)
+	}
+	if counting.listRolesCalls != 0 {
+		t.Fatalf("expected no role catalog reads, got %d", counting.listRolesCalls)
+	}
+	if counting.listPermissionsForRolesCalls != 0 {
+		t.Fatalf("expected no bulk permission reads, got %d", counting.listPermissionsForRolesCalls)
+	}
+	if counting.listRoleClosureCalls != 0 {
+		t.Fatalf("expected no role-closure lookups, got %d", counting.listRoleClosureCalls)
+	}
+}
+
+func TestCapabilities_NonAdminAssignment_SkipsRoleCatalogRead(t *testing.T) {
+	backing := memory.New()
+	counting := &countingStore{Store: backing}
+	env := setupWithStore(t, backing, counting)
+	ctx := context.Background()
+
+	must(t, env.store.CreateRole(ctx, &store.Role{Name: "viewer"}))
+	must(t, env.store.AddPermission(ctx, &store.Permission{Role: "viewer", Resource: "/wb/**", Action: "GET"}))
+	must(t, env.store.AssignRole(ctx, "alice", "viewer", "platform", ""))
+
+	r := reqWithSubject("GET", "/admin/me/capabilities", "alice")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if counting.listSubjectAssignmentsCall != 1 {
+		t.Fatalf("expected one assignment lookup, got %d", counting.listSubjectAssignmentsCall)
+	}
+	if counting.listRolesCalls != 0 {
+		t.Fatalf("expected no role catalog reads, got %d", counting.listRolesCalls)
+	}
+	if counting.listRoleClosureCalls != 1 {
+		t.Fatalf("expected one role-closure lookup, got %d", counting.listRoleClosureCalls)
+	}
+	if counting.getRoleCalls != 0 {
+		t.Fatalf("expected no per-role reads, got %d", counting.getRoleCalls)
+	}
+	if counting.listPermissionsForRolesCalls != 1 {
+		t.Fatalf("expected one bulk permission lookup, got %d", counting.listPermissionsForRolesCalls)
+	}
+
+	var resp capabilitiesResponse
+	must(t, json.NewDecoder(w.Body).Decode(&resp))
+	if resp.PlatformAdmin {
+		t.Fatal("expected non-admin subject to stay non-platform-admin")
+	}
+	if len(resp.PlatformCapabilities) != 0 {
+		t.Fatalf("expected empty platform capabilities, got %v", resp.PlatformCapabilities)
+	}
+	if len(resp.TenantCapabilities) != 0 {
+		t.Fatalf("expected no tenant capabilities, got %v", resp.TenantCapabilities)
+	}
+}
+
 // --- Bug C: platform admin sees all tenants ---
 
 func TestMyTenants_PlatformAdmin_SeesAllTenants(t *testing.T) {
@@ -446,5 +620,32 @@ func TestListRolePermissions_Unauthenticated(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestListRoles_UsesBulkPermissionLookup(t *testing.T) {
+	backing := memory.New()
+	counting := &countingStore{Store: backing}
+	env := setupWithStore(t, backing, counting)
+
+	setupPlatformAdmin(t, env, "root")
+	r := reqWithSubject("GET", "/admin/roles", "root")
+	w := httptest.NewRecorder()
+	env.mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if counting.listPermissionsForRolesCalls == 0 {
+		t.Fatal("expected bulk permissions lookup")
+	}
+	if counting.listPermissionsForRolesCalls != 2 {
+		t.Fatalf("expected auth check and handler to use bulk permission lookups, got %d", counting.listPermissionsForRolesCalls)
+	}
+	if counting.listRoleClosureCalls != 1 {
+		t.Fatalf("expected auth check to use one role-closure lookup, got %d", counting.listRoleClosureCalls)
+	}
+	if counting.getRolePermissionsCalls != 0 {
+		t.Fatalf("expected no per-role permission lookups, got %d", counting.getRolePermissionsCalls)
 	}
 }
