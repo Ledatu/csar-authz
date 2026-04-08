@@ -22,6 +22,7 @@ func extractServiceSubject(r *http.Request) (string, *apierror.Response) {
 
 func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /svc/tenants/{tenantId}/members/{subject}/roles", h.handleSvcAssignRole)
+	mux.HandleFunc("DELETE /svc/tenants/{tenantId}/members/{subject}/roles/{role}", h.handleSvcRevokeRole)
 	mux.HandleFunc("GET /svc/subjects/{subject}/scopes", h.handleSvcListSubjectScopes)
 	mux.HandleFunc("GET /svc/tenants/{tenantId}/assignments", h.handleSvcListScopeAssignments)
 }
@@ -61,6 +62,37 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 		// (e.g. campaigns) do not compensate against a live authz mutation.
 		h.logger.Error("svc assign role: audit write failed after successful role assignment",
 			"target", targetSubject, "role", body.Role, "tenant", tenantID, "error", err)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleSvcRevokeRole(w http.ResponseWriter, r *http.Request) {
+	actor, apiErr := extractServiceSubject(r)
+	if apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+
+	tenantID := r.PathValue("tenantId")
+	targetSubject := r.PathValue("subject")
+	role := r.PathValue("role")
+	if tenantID == "" || targetSubject == "" || role == "" {
+		apierror.New("bad_request", http.StatusBadRequest, "tenant ID, subject, and role are required").Write(w)
+		return
+	}
+
+	if err := h.engine.RevokeRole(r.Context(), targetSubject, role, "tenant", tenantID); err != nil {
+		h.logger.Error("svc revoke role failed", "target", targetSubject, "role", role, "error", err)
+		apierror.New("internal_error", http.StatusInternalServerError, "failed to revoke role").Write(w)
+		return
+	}
+
+	if err := h.recordAudit(r, actor, "role.revoke", "assignment", targetSubject+"/"+role, "tenant", tenantID, nil); err != nil {
+		// Role revoke already succeeded; do not fail the HTTP response so callers
+		// (e.g. campaigns) do not attempt to compensate against a live authz mutation.
+		h.logger.Error("svc revoke role: audit write failed after successful role revoke",
+			"target", targetSubject, "role", role, "tenant", tenantID, "error", err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

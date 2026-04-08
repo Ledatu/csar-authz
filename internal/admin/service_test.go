@@ -35,6 +35,16 @@ func reqSvcAssignRole(tenantID, targetSubject, role string) *http.Request {
 	return r.WithContext(ctx)
 }
 
+func reqSvcRevokeRole(tenantID, targetSubject, role string) *http.Request {
+	r := httptest.NewRequest(
+		http.MethodDelete,
+		"/svc/tenants/"+tenantID+"/members/"+targetSubject+"/roles/"+role,
+		nil,
+	)
+	ctx := gatewayctx.NewContext(r.Context(), &gatewayctx.Identity{Subject: "svc:aurumskynet-campaigns"})
+	return r.WithContext(ctx)
+}
+
 func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 	s := memory.New()
 	ctx := context.Background()
@@ -71,5 +81,42 @@ func TestSvcAssignRole_AssignFailureReturns500(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "failed to assign role") {
 		t.Fatalf("expected error body to mention assign failure, got %q", w.Body.String())
+	}
+}
+
+func TestSvcRevokeRole_AuditFailureStill204(t *testing.T) {
+	s := memory.New()
+	ctx := context.Background()
+	must(t, s.CreateRole(ctx, &store.Role{Name: "tenant_admin"}))
+	must(t, s.AssignRole(ctx, "user-1", "tenant_admin", "tenant", "tenant-1"))
+
+	eng := engine.New(s)
+	cfg := &authzconfig.AdminConfig{AuditRequired: true}
+	h := New(eng, failingAuditRecorder{}, nil, slog.Default(), cfg)
+	mux := http.NewServeMux()
+	h.RegisterServiceRoutes(mux)
+
+	r := reqSvcRevokeRole("tenant-1", "user-1", "tenant_admin")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 after successful role revoke even when audit fails, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSvcRevokeRole_MissingAssignmentStill204(t *testing.T) {
+	s := memory.New()
+	eng := engine.New(s)
+	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{})
+	mux := http.NewServeMux()
+	h.RegisterServiceRoutes(mux)
+
+	r := reqSvcRevokeRole("tenant-1", "user-1", "tenant_admin")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 when assignment does not exist, got %d: %s", w.Code, w.Body.String())
 	}
 }
