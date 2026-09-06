@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
@@ -60,8 +61,12 @@ func (s *Server) CheckAccess(ctx context.Context, req *pb.CheckAccessRequest) (*
 	if req.Subject != "" {
 		headers[gatewayctx.HeaderSubject] = req.Subject
 	}
+	if len(result.EffectiveRoles) > 0 {
+		headers[gatewayctx.HeaderRoles] = strings.Join(result.EffectiveRoles, ",")
+	}
 	if result.Allowed {
 		headers[gatewayctx.HeaderAuthzResult] = "allow"
+		headers[gatewayctx.HeaderAuthzScope] = strings.Join(result.MatchedScopes, ",")
 	} else {
 		headers[gatewayctx.HeaderAuthzResult] = "deny"
 	}

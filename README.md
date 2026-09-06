@@ -13,7 +13,33 @@ Client → csar (JWT validate) → csar-authz (CheckAccess) → upstream service
 - **Policy Decision Point (PDP)** — called by the CSAR router on every request
 - **RBAC model** — subjects → roles → permissions (resource pattern + action)
 - **Role hierarchy** — roles inherit permissions from parent roles
-- **Header enrichment** — returns `X-User-Roles`, `X-Authz-Decision`, `X-Authz-Matched-Roles` for downstream propagation
+- **Scoped assignments** — a subject holds roles either platform-wide (`scope_type: platform`) or inside one tenant (`scope_type: tenant`, `scope_id`)
+- **Header enrichment** — returns trusted `X-Gateway-*` headers for downstream propagation (see below)
+
+## Scope Evaluation
+
+`CheckAccess` always loads the subject's platform-scoped roles. When the
+request scope is `tenant`, the roles assigned in that tenant are merged in.
+The permission match runs over the union, so a platform-wide role that holds
+the requested `(resource, action)` satisfies a tenant-scoped check in every
+tenant — this is how platform staff (admins, managers) reach tenant routes
+without per-tenant assignments.
+
+The decision reports which scope produced the match so backends can tell
+platform staff from tenant members:
+
+| Header | Value |
+|--------|-------|
+| `X-Gateway-Authz-Result` | `allow` / `deny` |
+| `X-Gateway-Authz-Scope` | `platform`, `tenant`, or `platform,tenant` — scope types whose assignments produced a matched role (allow only) |
+| `X-Gateway-Roles` | effective roles (direct + inherited) across the evaluated scopes |
+| `X-Gateway-Subject` | the checked subject |
+| `X-User-Roles`, `X-Authz-Decision`, `X-Authz-Matched-Roles` | legacy aliases kept for older backends |
+
+The router adds `X-Gateway-Authz-Policy` (the route policy branch that
+granted access) on top of these. Backends read everything through
+`gatewayctx.FromContext` — `Identity.IsPlatformActor()` answers "is this
+platform staff acting on a tenant?".
 
 ## Quick Start
 

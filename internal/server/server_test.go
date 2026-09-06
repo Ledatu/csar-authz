@@ -94,6 +94,12 @@ func TestCheckAccess_Flow(t *testing.T) {
 	if resp.EnrichedHeaders[gatewayctx.HeaderAuthzResult] != "allow" {
 		t.Errorf("expected %s=allow, got %q", gatewayctx.HeaderAuthzResult, resp.EnrichedHeaders[gatewayctx.HeaderAuthzResult])
 	}
+	if resp.EnrichedHeaders[gatewayctx.HeaderAuthzScope] != "platform" {
+		t.Errorf("expected %s=platform, got %q", gatewayctx.HeaderAuthzScope, resp.EnrichedHeaders[gatewayctx.HeaderAuthzScope])
+	}
+	if resp.EnrichedHeaders[gatewayctx.HeaderRoles] != "viewer" {
+		t.Errorf("expected %s=viewer, got %q", gatewayctx.HeaderRoles, resp.EnrichedHeaders[gatewayctx.HeaderRoles])
+	}
 
 	// CheckAccess: denied (wrong action).
 	resp, err = srv.CheckAccess(ctx, &pb.CheckAccessRequest{

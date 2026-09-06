@@ -12,11 +12,22 @@ import (
 	"github.com/ledatu/csar-authz/internal/store"
 )
 
+// Scope types recognised by the engine.
+const (
+	ScopePlatform = "platform"
+	ScopeTenant   = "tenant"
+)
+
 // Result holds the outcome of an access check.
 type Result struct {
 	Allowed        bool
 	MatchedRoles   []string
 	EffectiveRoles []string
+	// MatchedScopes lists the scope types whose assignments produced at
+	// least one matched role, in canonical order (platform, tenant). It lets
+	// callers distinguish platform staff acting on a tenant from members of
+	// that tenant.
+	MatchedScopes []string
 }
 
 // Engine evaluates RBAC access decisions against a policy store.
@@ -37,33 +48,32 @@ func New(s store.Store) *Engine {
 //  2. If the scope is tenant, also fetch tenant-scoped roles and merge.
 //  3. Expand role hierarchy by collecting all parent roles (with cycle detection).
 //  4. For each effective role, check if any permission matches (resource + action).
-//  5. Return the result with matched roles and effective roles.
+//  5. Return the result with matched roles, effective roles, and the scopes
+//     whose assignments produced the matched roles.
 func (e *Engine) CheckAccess(ctx context.Context, subject, scopeType, scopeID, resource, action string) (*Result, error) {
-	// 1. Always get platform roles.
-	platformRoles, err := e.store.GetSubjectRoles(ctx, subject, "platform", "")
+	platformRoles, err := e.store.GetSubjectRoles(ctx, subject, ScopePlatform, "")
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. If tenant scope, also fetch tenant roles and merge.
-	directRoles := platformRoles
-	if scopeType == "tenant" && scopeID != "" {
-		tenantRoles, err := e.store.GetSubjectRoles(ctx, subject, "tenant", scopeID)
+	var tenantRoles []string
+	if scopeType == ScopeTenant && scopeID != "" {
+		tenantRoles, err = e.store.GetSubjectRoles(ctx, subject, ScopeTenant, scopeID)
 		if err != nil {
 			return nil, err
 		}
-		directRoles = mergeUnique(platformRoles, tenantRoles)
 	}
 
+	directRoles := mergeUnique(platformRoles, tenantRoles)
 	if len(directRoles) == 0 {
 		return &Result{Allowed: false}, nil
 	}
 
-	// 3. Expand role hierarchy.
-	effectiveRoles, err := e.expandRoles(ctx, directRoles)
+	closureByRole, err := e.store.ListRoleClosure(ctx, directRoles)
 	if err != nil {
 		return nil, err
 	}
+	effectiveRoles := flattenClosure(directRoles, closureByRole)
 	if len(effectiveRoles) == 0 {
 		return &Result{Allowed: false}, nil
 	}
@@ -73,7 +83,6 @@ func (e *Engine) CheckAccess(ctx context.Context, subject, scopeType, scopeID, r
 		return nil, err
 	}
 
-	// 4. Check permissions for each effective role.
 	var matchedRoles []string
 	for _, role := range effectiveRoles {
 		for _, perm := range permissionsByRole[role] {
@@ -84,11 +93,40 @@ func (e *Engine) CheckAccess(ctx context.Context, subject, scopeType, scopeID, r
 		}
 	}
 
+	rolesByScope := map[string][]string{
+		ScopePlatform: flattenClosure(platformRoles, closureByRole),
+		ScopeTenant:   flattenClosure(tenantRoles, closureByRole),
+	}
+
 	return &Result{
 		Allowed:        len(matchedRoles) > 0,
 		MatchedRoles:   matchedRoles,
 		EffectiveRoles: effectiveRoles,
+		MatchedScopes:  scopesGranting(matchedRoles, rolesByScope),
 	}, nil
+}
+
+// scopesGranting returns, in canonical order, every scope type whose
+// effective roles include at least one matched role.
+func scopesGranting(matchedRoles []string, rolesByScope map[string][]string) []string {
+	if len(matchedRoles) == 0 {
+		return nil
+	}
+	matched := make(map[string]struct{}, len(matchedRoles))
+	for _, role := range matchedRoles {
+		matched[role] = struct{}{}
+	}
+
+	var scopes []string
+	for _, scope := range []string{ScopePlatform, ScopeTenant} {
+		for _, role := range rolesByScope[scope] {
+			if _, ok := matched[role]; ok {
+				scopes = append(scopes, scope)
+				break
+			}
+		}
+	}
+	return scopes
 }
 
 // mergeUnique combines two string slices, removing duplicates.
@@ -117,7 +155,12 @@ func (e *Engine) expandRoles(ctx context.Context, roles []string) ([]string, err
 	if err != nil {
 		return nil, err
 	}
+	return flattenClosure(roles, closureByRole), nil
+}
 
+// flattenClosure walks the direct roles in order and returns every role
+// reachable through the closure map, deduplicated, direct roles first.
+func flattenClosure(roles []string, closureByRole map[string][]string) []string {
 	seen := make(map[string]struct{}, len(roles))
 	result := make([]string, 0, len(roles))
 	for _, role := range roles {
@@ -129,7 +172,7 @@ func (e *Engine) expandRoles(ctx context.Context, roles []string) ([]string, err
 			result = append(result, expandedRole)
 		}
 	}
-	return result, nil
+	return result
 }
 
 // EnrichedHeaders builds the header map to inject into upstream requests.

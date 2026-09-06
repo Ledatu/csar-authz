@@ -415,3 +415,123 @@ func TestMergeUnique(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckAccess_MatchedScopes_TenantOnly(t *testing.T) {
+	e, ctx := setupTestEngine(t)
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "tenant_viewer"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "tenant_viewer", Resource: "campaign", Action: "read"})
+	_ = e.AssignRole(ctx, "user-1", "tenant_viewer", "tenant", "wildberries:s1")
+
+	result, err := e.CheckAccess(ctx, "user-1", "tenant", "wildberries:s1", "campaign", "read")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatal("expected allowed")
+	}
+	if !equalStrings(result.MatchedScopes, []string{"tenant"}) {
+		t.Errorf("MatchedScopes = %v, want [tenant]", result.MatchedScopes)
+	}
+}
+
+func TestCheckAccess_MatchedScopes_PlatformActingOnTenant(t *testing.T) {
+	e, ctx := setupTestEngine(t)
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "platform_manager"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "platform_manager", Resource: "campaign", Action: "read"})
+	_ = e.AssignRole(ctx, "staff-1", "platform_manager", "platform", "")
+
+	result, err := e.CheckAccess(ctx, "staff-1", "tenant", "wildberries:s1", "campaign", "read")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatal("expected platform role to satisfy a tenant-scoped check")
+	}
+	if !equalStrings(result.MatchedScopes, []string{"platform"}) {
+		t.Errorf("MatchedScopes = %v, want [platform]", result.MatchedScopes)
+	}
+}
+
+func TestCheckAccess_MatchedScopes_InheritedRoleAttributedToItsScope(t *testing.T) {
+	e, ctx := setupTestEngine(t)
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "tenant_viewer"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "tenant_viewer", Resource: "campaign", Action: "read"})
+	_ = e.CreateRole(ctx, &store.Role{Name: "platform_admin", Parents: []string{"tenant_viewer"}})
+	_ = e.AssignRole(ctx, "admin-1", "platform_admin", "platform", "")
+
+	result, err := e.CheckAccess(ctx, "admin-1", "tenant", "ozon:123", "campaign", "read")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !result.Allowed {
+		t.Fatal("expected allowed via inherited tenant_viewer")
+	}
+	if !equalStrings(result.MatchedRoles, []string{"tenant_viewer"}) {
+		t.Errorf("MatchedRoles = %v, want [tenant_viewer]", result.MatchedRoles)
+	}
+	if !equalStrings(result.MatchedScopes, []string{"platform"}) {
+		t.Errorf("MatchedScopes = %v, want [platform] (role reached through a platform assignment)", result.MatchedScopes)
+	}
+}
+
+func TestCheckAccess_MatchedScopes_BothScopesGrant(t *testing.T) {
+	e, ctx := setupTestEngine(t)
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "platform_manager"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "platform_manager", Resource: "campaign", Action: "read"})
+	_ = e.CreateRole(ctx, &store.Role{Name: "tenant_viewer"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "tenant_viewer", Resource: "campaign", Action: "read"})
+
+	_ = e.AssignRole(ctx, "user-2", "platform_manager", "platform", "")
+	_ = e.AssignRole(ctx, "user-2", "tenant_viewer", "tenant", "t1")
+
+	result, err := e.CheckAccess(ctx, "user-2", "tenant", "t1", "campaign", "read")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !equalStrings(result.MatchedScopes, []string{"platform", "tenant"}) {
+		t.Errorf("MatchedScopes = %v, want [platform tenant]", result.MatchedScopes)
+	}
+
+	result, err = e.CheckAccess(ctx, "user-2", "tenant", "t2", "campaign", "read")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if !equalStrings(result.MatchedScopes, []string{"platform"}) {
+		t.Errorf("MatchedScopes in unassigned tenant = %v, want [platform]", result.MatchedScopes)
+	}
+}
+
+func TestCheckAccess_MatchedScopes_EmptyWhenDenied(t *testing.T) {
+	e, ctx := setupTestEngine(t)
+
+	_ = e.CreateRole(ctx, &store.Role{Name: "tenant_viewer"})
+	_ = e.AddPermission(ctx, &store.Permission{Role: "tenant_viewer", Resource: "campaign", Action: "read"})
+	_ = e.AssignRole(ctx, "user-3", "tenant_viewer", "tenant", "t1")
+
+	result, err := e.CheckAccess(ctx, "user-3", "tenant", "t1", "campaign", "write")
+	if err != nil {
+		t.Fatalf("CheckAccess: %v", err)
+	}
+	if result.Allowed {
+		t.Fatal("expected denied")
+	}
+	if len(result.MatchedScopes) != 0 {
+		t.Errorf("MatchedScopes = %v, want empty on deny", result.MatchedScopes)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
