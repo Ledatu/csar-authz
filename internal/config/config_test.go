@@ -237,3 +237,47 @@ audit:
 		t.Fatal("expected error for partially configured audit block")
 	}
 }
+
+func TestLoadFromBytes_ServiceAssignableRolesMustExist(t *testing.T) {
+	yaml := `
+policy:
+  roles:
+    - name: tenant_admin
+      permissions:
+        - resource: "campaign"
+          action: "write"
+admin:
+  enabled: true
+  tls:
+    cert_file: "/x.pem"
+    key_file: "/x-key.pem"
+    client_ca_file: "/ca.pem"
+  service_assignable_roles: ["tenant_admin", "ghost_role"]
+`
+	if _, err := LoadFromBytes([]byte(yaml)); err == nil {
+		t.Fatal("expected error for undefined role in admin.service_assignable_roles")
+	}
+
+	ok := `
+policy:
+  roles:
+    - name: tenant_admin
+      permissions:
+        - resource: "campaign"
+          action: "write"
+admin:
+  enabled: true
+  tls:
+    cert_file: "/x.pem"
+    key_file: "/x-key.pem"
+    client_ca_file: "/ca.pem"
+  service_assignable_roles: ["tenant_admin"]
+`
+	cfg, err := LoadFromBytes([]byte(ok))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Admin.ServiceAssignableRoles) != 1 || cfg.Admin.ServiceAssignableRoles[0] != "tenant_admin" {
+		t.Fatalf("service_assignable_roles = %v", cfg.Admin.ServiceAssignableRoles)
+	}
+}

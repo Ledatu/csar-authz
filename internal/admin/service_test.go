@@ -51,7 +51,7 @@ func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 	must(t, s.CreateRole(ctx, &store.Role{Name: "tenant_admin"}))
 
 	eng := engine.New(s)
-	cfg := &authzconfig.AdminConfig{AuditRequired: true}
+	cfg := &authzconfig.AdminConfig{AuditRequired: true, ServiceAssignableRoles: []string{"tenant_admin"}}
 	h := New(eng, failingAuditRecorder{}, nil, slog.Default(), cfg)
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
@@ -68,7 +68,7 @@ func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 func TestSvcAssignRole_AssignFailureReturns500(t *testing.T) {
 	s := memory.New()
 	eng := engine.New(s)
-	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{})
+	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{ServiceAssignableRoles: []string{"tenant_admin"}})
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 
@@ -91,7 +91,7 @@ func TestSvcRevokeRole_AuditFailureStill204(t *testing.T) {
 	must(t, s.AssignRole(ctx, "user-1", "tenant_admin", "tenant", "tenant-1"))
 
 	eng := engine.New(s)
-	cfg := &authzconfig.AdminConfig{AuditRequired: true}
+	cfg := &authzconfig.AdminConfig{AuditRequired: true, ServiceAssignableRoles: []string{"tenant_admin"}}
 	h := New(eng, failingAuditRecorder{}, nil, slog.Default(), cfg)
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
@@ -108,7 +108,7 @@ func TestSvcRevokeRole_AuditFailureStill204(t *testing.T) {
 func TestSvcRevokeRole_MissingAssignmentStill204(t *testing.T) {
 	s := memory.New()
 	eng := engine.New(s)
-	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{})
+	h := New(eng, nil, nil, slog.Default(), &authzconfig.AdminConfig{ServiceAssignableRoles: []string{"tenant_admin"}})
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 
@@ -118,5 +118,83 @@ func TestSvcRevokeRole_MissingAssignmentStill204(t *testing.T) {
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204 when assignment does not exist, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func newSvcHandler(t *testing.T, assignable ...string) (*Handler, *http.ServeMux, store.Store) {
+	t.Helper()
+	s := memory.New()
+	ctx := context.Background()
+	must(t, s.CreateRole(ctx, &store.Role{Name: "tenant_admin"}))
+	must(t, s.CreateRole(ctx, &store.Role{Name: "platform_admin"}))
+	must(t, s.CreateRole(ctx, &store.Role{Name: "admin"}))
+
+	cfg := &authzconfig.AdminConfig{ServiceAssignableRoles: assignable}
+	h := New(engine.New(s), nil, nil, slog.Default(), cfg)
+	mux := http.NewServeMux()
+	h.RegisterServiceRoutes(mux)
+	return h, mux, s
+}
+
+func TestSvcAssignRole_RejectsRoleOutsideAllowlist(t *testing.T) {
+	_, mux, s := newSvcHandler(t, "tenant_admin")
+
+	for _, role := range []string{"platform_admin", "admin"} {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, reqSvcAssignRole("tenant-1", "user-1", role))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("assign %s: status = %d, want 403 (body %s)", role, w.Code, w.Body.String())
+		}
+		roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+		must(t, err)
+		if len(roles) != 0 {
+			t.Fatalf("assign %s: assignment was created despite rejection: %v", role, roles)
+		}
+	}
+}
+
+func TestSvcAssignRole_EmptyAllowlistDeniesEverything(t *testing.T) {
+	_, mux, s := newSvcHandler(t)
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, reqSvcAssignRole("tenant-1", "user-1", "tenant_admin"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 with empty allowlist", w.Code)
+	}
+	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+	must(t, err)
+	if len(roles) != 0 {
+		t.Fatalf("assignment created despite empty allowlist: %v", roles)
+	}
+}
+
+func TestSvcAssignRole_AllowlistedRoleSucceeds(t *testing.T) {
+	_, mux, s := newSvcHandler(t, "tenant_admin")
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, reqSvcAssignRole("tenant-1", "user-1", "tenant_admin"))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204 (body %s)", w.Code, w.Body.String())
+	}
+	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+	must(t, err)
+	if len(roles) != 1 || roles[0] != "tenant_admin" {
+		t.Fatalf("roles = %v, want [tenant_admin]", roles)
+	}
+}
+
+func TestSvcRevokeRole_RejectsRoleOutsideAllowlist(t *testing.T) {
+	_, mux, s := newSvcHandler(t, "tenant_admin")
+	must(t, s.AssignRole(context.Background(), "user-1", "platform_admin", "tenant", "tenant-1"))
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, reqSvcRevokeRole("tenant-1", "user-1", "platform_admin"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+	must(t, err)
+	if len(roles) != 1 {
+		t.Fatalf("assignment removed despite rejection: %v", roles)
 	}
 }

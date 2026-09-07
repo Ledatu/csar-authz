@@ -336,6 +336,12 @@ func run(
 			logger.Info("central audit client initialized", "base_url", cfg.Audit.RouterBaseURL)
 		}
 
+		if len(cfg.Admin.ServiceAssignableRoles) == 0 {
+			logger.Warn("admin.service_assignable_roles is empty: every /svc role assign/revoke will be rejected")
+		}
+		if cfg.Admin.AllowedClientCN == "" {
+			logger.Warn("admin.allowed_client_cn is unset: any client certificate signed by the CA can use the admin API")
+		}
 		adminHandler = admin.New(eng, auditRecorder, nil, logger.With("component", "admin"), &cfg.Admin)
 
 		adminMux := http.NewServeMux()

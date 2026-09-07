@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/ledatu/csar-core/apierror"
@@ -18,6 +19,18 @@ func extractServiceSubject(r *http.Request) (string, *apierror.Response) {
 		return "", apierror.New(apierror.CodeAccessDenied, http.StatusForbidden, "service identity required")
 	}
 	return subject, nil
+}
+
+// requireServiceAssignable rejects roles outside admin.service_assignable_roles.
+// A service caller is trusted only by its gateway subject, so the allowlist is
+// what keeps a compromised service from granting admin or platform roles.
+func (h *Handler) requireServiceAssignable(actor, tenantID, role string) *apierror.Response {
+	if slices.Contains(h.cfg.Load().ServiceAssignableRoles, role) {
+		return nil
+	}
+	h.logger.Warn("svc role write rejected: role not service-assignable",
+		"actor", actor, "tenant", tenantID, "role", role)
+	return apierror.New(apierror.CodeAccessDenied, http.StatusForbidden, "role is not assignable by services")
 }
 
 func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
@@ -50,6 +63,10 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 		apierror.New("bad_request", http.StatusBadRequest, "request body must contain role").Write(w)
 		return
 	}
+	if apiErr := h.requireServiceAssignable(actor, tenantID, body.Role); apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
 
 	if err := h.engine.AssignRole(r.Context(), targetSubject, body.Role, "tenant", tenantID); err != nil {
 		h.logger.Error("svc assign role failed", "target", targetSubject, "role", body.Role, "error", err)
@@ -79,6 +96,10 @@ func (h *Handler) handleSvcRevokeRole(w http.ResponseWriter, r *http.Request) {
 	role := r.PathValue("role")
 	if tenantID == "" || targetSubject == "" || role == "" {
 		apierror.New("bad_request", http.StatusBadRequest, "tenant ID, subject, and role are required").Write(w)
+		return
+	}
+	if apiErr := h.requireServiceAssignable(actor, tenantID, role); apiErr != nil {
+		writeError(w, apiErr)
 		return
 	}
 

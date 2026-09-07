@@ -41,6 +41,20 @@ granted access) on top of these. Backends read everything through
 `gatewayctx.FromContext` — `Identity.IsPlatformActor()` answers "is this
 platform staff acting on a tenant?".
 
+## Service-Facing Role Writes
+
+The admin HTTP listener (`admin.addr`, mTLS) exposes `/svc/*` endpoints that
+backend services use to assign and revoke tenant roles. A service caller is
+trusted only by the gateway subject the router forwards, so two config
+settings bound what that surface can do:
+
+| Setting | Effect |
+|---------|--------|
+| `admin.allowed_client_cn` | Only this client certificate CN (the router's) may reach the admin API; unset accepts any CA-signed certificate |
+| `admin.service_assignable_roles` | Roles `/svc` may assign or revoke in tenant scope; empty rejects every service role write |
+
+Both are read at startup; change them via config publish plus restart.
+
 ## Quick Start
 
 ```bash
