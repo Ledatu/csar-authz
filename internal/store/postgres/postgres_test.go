@@ -5,6 +5,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/ledatu/csar-authz/internal/store"
 )
@@ -322,6 +323,12 @@ func TestListAssignmentsForScopes_PG(t *testing.T) {
 	got, err := s.ListAssignmentsForScopes(ctx, "tenant", []string{"wildberries:b", "wildberries:a", "wildberries:missing"})
 	if err != nil {
 		t.Fatalf("ListAssignmentsForScopes: %v", err)
+	}
+	for i := range got {
+		if got[i].AssignedAt.IsZero() {
+			t.Fatalf("assignment %+v has no assigned_at", got[i])
+		}
+		got[i].AssignedAt = time.Time{}
 	}
 	want := []store.ScopedAssignment{
 		{Subject: "alice", Role: "tenant_admin", ScopeType: "tenant", ScopeID: "wildberries:a"},

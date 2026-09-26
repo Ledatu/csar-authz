@@ -38,10 +38,11 @@ type Permission struct {
 
 // ScopedAssignment represents a subject-role binding within a scope.
 type ScopedAssignment struct {
-	Subject   string
-	Role      string
-	ScopeType string // "platform" or "tenant"
-	ScopeID   string // "" for platform, tenant identifier for tenant
+	Subject    string
+	Role       string
+	ScopeType  string // "platform" or "tenant"
+	ScopeID    string // "" for platform, tenant identifier for tenant
+	AssignedAt time.Time
 }
 
 // SubjectScope represents a distinct scope where a subject has assignments.

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/ledatu/csar-core/apierror"
 )
@@ -201,9 +202,10 @@ type svcAssignmentQueryRequest struct {
 }
 
 type tenantAssignmentDTO struct {
-	TenantID string `json:"tenant_id"`
-	Subject  string `json:"subject"`
-	Role     string `json:"role"`
+	TenantID   string     `json:"tenant_id"`
+	Subject    string     `json:"subject"`
+	Role       string     `json:"role"`
+	AssignedAt *time.Time `json:"assigned_at,omitempty"`
 }
 
 type svcAssignmentQueryResponse struct {
@@ -240,7 +242,12 @@ func (h *Handler) handleSvcQueryAssignments(w http.ResponseWriter, r *http.Reque
 
 	out := make([]tenantAssignmentDTO, 0, len(assignments))
 	for _, a := range assignments {
-		out = append(out, tenantAssignmentDTO{TenantID: a.ScopeID, Subject: a.Subject, Role: a.Role})
+		dto := tenantAssignmentDTO{TenantID: a.ScopeID, Subject: a.Subject, Role: a.Role}
+		if !a.AssignedAt.IsZero() {
+			assignedAt := a.AssignedAt.UTC()
+			dto.AssignedAt = &assignedAt
+		}
+		out = append(out, dto)
 	}
 	writeJSON(w, http.StatusOK, svcAssignmentQueryResponse{Assignments: out})
 }

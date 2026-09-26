@@ -318,7 +318,7 @@ func (s *Store) ListSubjectAssignments(ctx context.Context, subject string) ([]s
 
 func (s *Store) ListScopeAssignments(ctx context.Context, scopeType, scopeID string) ([]store.ScopedAssignment, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT subject, role, scope_type, scope_id FROM assignments WHERE scope_type = $1 AND scope_id = $2 ORDER BY subject, role`,
+		`SELECT subject, role, scope_type, scope_id, assigned_at FROM assignments WHERE scope_type = $1 AND scope_id = $2 ORDER BY subject, role`,
 		scopeType, scopeID,
 	)
 	if err != nil {
@@ -332,7 +332,7 @@ func (s *Store) ListAssignmentsForScopes(ctx context.Context, scopeType string, 
 		return nil, nil
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT subject, role, scope_type, scope_id FROM assignments WHERE scope_type = $1 AND scope_id = ANY($2) ORDER BY scope_id, subject, role`,
+		`SELECT subject, role, scope_type, scope_id, assigned_at FROM assignments WHERE scope_type = $1 AND scope_id = ANY($2) ORDER BY scope_id, subject, role`,
 		scopeType, scopeIDs,
 	)
 	if err != nil {
@@ -347,7 +347,7 @@ func scanScopedAssignments(rows pgx.Rows) ([]store.ScopedAssignment, error) {
 	var assignments []store.ScopedAssignment
 	for rows.Next() {
 		var a store.ScopedAssignment
-		if err := rows.Scan(&a.Subject, &a.Role, &a.ScopeType, &a.ScopeID); err != nil {
+		if err := rows.Scan(&a.Subject, &a.Role, &a.ScopeType, &a.ScopeID, &a.AssignedAt); err != nil {
 			return nil, fmt.Errorf("scanning assignment: %w", err)
 		}
 		assignments = append(assignments, a)
