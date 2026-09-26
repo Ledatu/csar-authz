@@ -439,6 +439,21 @@ func (s *Store) ListScopeAssignments(_ context.Context, scopeType, scopeID strin
 	return result, nil
 }
 
+// ListAssignmentsForScopes returns all assignments within the given scopes of one type.
+func (s *Store) ListAssignmentsForScopes(ctx context.Context, scopeType string, scopeIDs []string) ([]store.ScopedAssignment, error) {
+	ids := slices.Clone(scopeIDs)
+	slices.Sort(ids)
+	var result []store.ScopedAssignment
+	for _, id := range slices.Compact(ids) {
+		assignments, err := s.ListScopeAssignments(ctx, scopeType, id)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, assignments...)
+	}
+	return result, nil
+}
+
 // ListSubjectScopes returns all distinct scopes where a subject has assignments.
 func (s *Store) ListSubjectScopes(_ context.Context, subject string) ([]store.SubjectScope, error) {
 	s.mu.RLock()

@@ -198,3 +198,75 @@ func TestSvcRevokeRole_RejectsRoleOutsideAllowlist(t *testing.T) {
 		t.Fatalf("assignment removed despite rejection: %v", roles)
 	}
 }
+
+func reqSvcQueryAssignments(subject, body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/svc/assignments/query", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := gatewayctx.NewContext(r.Context(), &gatewayctx.Identity{Subject: subject})
+	return r.WithContext(ctx)
+}
+
+func TestSvcQueryAssignments_ReturnsRequestedTenantsOnly(t *testing.T) {
+	_, mux, s := newSvcHandler(t)
+	ctx := context.Background()
+	must(t, s.AssignRole(ctx, "user-1", "tenant_admin", "tenant", "wildberries:a"))
+	must(t, s.AssignRole(ctx, "user-2", "admin", "tenant", "wildberries:a"))
+	must(t, s.AssignRole(ctx, "user-3", "tenant_admin", "tenant", "wildberries:b"))
+	must(t, s.AssignRole(ctx, "user-4", "tenant_admin", "tenant", "wildberries:c"))
+	must(t, s.AssignRole(ctx, "user-5", "platform_admin", "platform", ""))
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, reqSvcQueryAssignments("svc:aurumskynet-campaigns",
+		`{"tenant_ids":["wildberries:b","wildberries:a","wildberries:a","wildberries:missing"]}`))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+
+	var resp svcAssignmentQueryResponse
+	must(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	want := []tenantAssignmentDTO{
+		{TenantID: "wildberries:a", Subject: "user-1", Role: "tenant_admin"},
+		{TenantID: "wildberries:a", Subject: "user-2", Role: "admin"},
+		{TenantID: "wildberries:b", Subject: "user-3", Role: "tenant_admin"},
+	}
+	if len(resp.Assignments) != len(want) {
+		t.Fatalf("assignments = %+v, want %+v", resp.Assignments, want)
+	}
+	for i := range want {
+		if resp.Assignments[i] != want[i] {
+			t.Fatalf("assignments[%d] = %+v, want %+v", i, resp.Assignments[i], want[i])
+		}
+	}
+}
+
+func TestSvcQueryAssignments_RejectsInvalidRequests(t *testing.T) {
+	_, mux, _ := newSvcHandler(t)
+	tooMany := make([]string, maxSvcAssignmentQueryTenants+1)
+	for i := range tooMany {
+		tooMany[i] = "wildberries:x"
+	}
+	tooManyBody, _ := json.Marshal(svcAssignmentQueryRequest{TenantIDs: tooMany})
+
+	cases := []struct {
+		name    string
+		subject string
+		body    string
+		want    int
+	}{
+		{"user subject", "user-1", `{"tenant_ids":["wildberries:a"]}`, http.StatusForbidden},
+		{"no subject", "", `{"tenant_ids":["wildberries:a"]}`, http.StatusUnauthorized},
+		{"empty list", "svc:aurumskynet-campaigns", `{"tenant_ids":[]}`, http.StatusBadRequest},
+		{"empty id", "svc:aurumskynet-campaigns", `{"tenant_ids":["wildberries:a",""]}`, http.StatusBadRequest},
+		{"too many", "svc:aurumskynet-campaigns", string(tooManyBody), http.StatusBadRequest},
+		{"malformed", "svc:aurumskynet-campaigns", `{`, http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, reqSvcQueryAssignments(tc.subject, tc.body))
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}

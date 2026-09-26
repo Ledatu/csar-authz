@@ -93,6 +93,9 @@ type Store interface {
 	// ListScopeAssignments returns all assignments within a given scope.
 	ListScopeAssignments(ctx context.Context, scopeType, scopeID string) ([]ScopedAssignment, error)
 
+	// ListAssignmentsForScopes returns all assignments within the given scopes of one type.
+	ListAssignmentsForScopes(ctx context.Context, scopeType string, scopeIDs []string) ([]ScopedAssignment, error)
+
 	// ListSubjectScopes returns all distinct (scope_type, scope_id) pairs where a subject has assignments.
 	ListSubjectScopes(ctx context.Context, subject string) ([]SubjectScope, error)
 

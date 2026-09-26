@@ -20,6 +20,7 @@
 - Policy sync from config into the store at startup and during reload.
 - Bootstrap assignments for initial platform and tenant access.
 - Admin write/query flows for roles, members, permissions, and service-facing operations.
+- `POST /svc/assignments/query` returns tenant assignments for up to 1000 tenants in one call; the legacy identity sync in aurumskynet-campaigns uses it instead of one `GET /svc/tenants/{id}/assignments` per cabinet.
 
 ## Dependencies
 - PostgreSQL or the in-memory store, depending on configuration.

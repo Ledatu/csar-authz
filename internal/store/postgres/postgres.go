@@ -324,6 +324,24 @@ func (s *Store) ListScopeAssignments(ctx context.Context, scopeType, scopeID str
 	if err != nil {
 		return nil, fmt.Errorf("listing scope assignments: %w", err)
 	}
+	return scanScopedAssignments(rows)
+}
+
+func (s *Store) ListAssignmentsForScopes(ctx context.Context, scopeType string, scopeIDs []string) ([]store.ScopedAssignment, error) {
+	if len(scopeIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT subject, role, scope_type, scope_id FROM assignments WHERE scope_type = $1 AND scope_id = ANY($2) ORDER BY scope_id, subject, role`,
+		scopeType, scopeIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("listing assignments for scopes: %w", err)
+	}
+	return scanScopedAssignments(rows)
+}
+
+func scanScopedAssignments(rows pgx.Rows) ([]store.ScopedAssignment, error) {
 	defer rows.Close()
 
 	var assignments []store.ScopedAssignment

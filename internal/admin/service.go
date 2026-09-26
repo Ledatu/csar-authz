@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -38,6 +39,7 @@ func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /svc/tenants/{tenantId}/members/{subject}/roles/{role}", h.handleSvcRevokeRole)
 	mux.HandleFunc("GET /svc/subjects/{subject}/scopes", h.handleSvcListSubjectScopes)
 	mux.HandleFunc("GET /svc/tenants/{tenantId}/assignments", h.handleSvcListScopeAssignments)
+	mux.HandleFunc("POST /svc/assignments/query", h.handleSvcQueryAssignments)
 }
 
 type svcAssignRoleRequest struct {
@@ -187,4 +189,58 @@ func (h *Handler) handleSvcListScopeAssignments(w http.ResponseWriter, r *http.R
 		out = append(out, assignmentDTO{Subject: a.Subject, Role: a.Role})
 	}
 	writeJSON(w, http.StatusOK, svcAssignmentsResponse{Assignments: out})
+}
+
+const (
+	maxSvcAssignmentQueryTenants   = 1000
+	maxSvcAssignmentQueryBodyBytes = 1 << 20
+)
+
+type svcAssignmentQueryRequest struct {
+	TenantIDs []string `json:"tenant_ids"`
+}
+
+type tenantAssignmentDTO struct {
+	TenantID string `json:"tenant_id"`
+	Subject  string `json:"subject"`
+	Role     string `json:"role"`
+}
+
+type svcAssignmentQueryResponse struct {
+	Assignments []tenantAssignmentDTO `json:"assignments"`
+}
+
+func (h *Handler) handleSvcQueryAssignments(w http.ResponseWriter, r *http.Request) {
+	if _, apiErr := extractServiceSubject(r); apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
+
+	var req svcAssignmentQueryRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSvcAssignmentQueryBodyBytes)).Decode(&req); err != nil {
+		apierror.New("bad_request", http.StatusBadRequest, "request body must contain tenant_ids").Write(w)
+		return
+	}
+	if len(req.TenantIDs) == 0 || len(req.TenantIDs) > maxSvcAssignmentQueryTenants {
+		apierror.New("bad_request", http.StatusBadRequest,
+			fmt.Sprintf("tenant_ids must contain 1 to %d entries", maxSvcAssignmentQueryTenants)).Write(w)
+		return
+	}
+	if slices.Contains(req.TenantIDs, "") {
+		apierror.New("bad_request", http.StatusBadRequest, "tenant_ids must not contain empty values").Write(w)
+		return
+	}
+
+	assignments, err := h.engine.ListAssignmentsForScopes(r.Context(), "tenant", req.TenantIDs)
+	if err != nil {
+		h.logger.Error("svc query assignments failed", "tenants", len(req.TenantIDs), "error", err)
+		apierror.New("internal_error", http.StatusInternalServerError, "failed to list assignments").Write(w)
+		return
+	}
+
+	out := make([]tenantAssignmentDTO, 0, len(assignments))
+	for _, a := range assignments {
+		out = append(out, tenantAssignmentDTO{TenantID: a.ScopeID, Subject: a.Subject, Role: a.Role})
+	}
+	writeJSON(w, http.StatusOK, svcAssignmentQueryResponse{Assignments: out})
 }

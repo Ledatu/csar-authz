@@ -254,6 +254,11 @@ func (e *Engine) ListScopeAssignments(ctx context.Context, scopeType, scopeID st
 	return e.store.ListScopeAssignments(ctx, scopeType, scopeID)
 }
 
+// ListAssignmentsForScopes delegates to the store.
+func (e *Engine) ListAssignmentsForScopes(ctx context.Context, scopeType string, scopeIDs []string) ([]store.ScopedAssignment, error) {
+	return e.store.ListAssignmentsForScopes(ctx, scopeType, scopeIDs)
+}
+
 // ListSubjectScopes delegates to the store.
 func (e *Engine) ListSubjectScopes(ctx context.Context, subject string) ([]store.SubjectScope, error) {
 	return e.store.ListSubjectScopes(ctx, subject)

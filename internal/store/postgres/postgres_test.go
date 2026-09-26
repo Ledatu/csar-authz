@@ -300,3 +300,39 @@ func TestListPermissionsForRoles_PG(t *testing.T) {
 		t.Fatalf("unexpected viewer permissions: %+v", perms["viewer"])
 	}
 }
+
+func TestListAssignmentsForScopes_PG(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if err := s.SyncPolicy(ctx, []*store.Role{{Name: "tenant_admin"}, {Name: "tenant_viewer"}}, nil); err != nil {
+		t.Fatalf("SyncPolicy: %v", err)
+	}
+	for _, a := range []store.ScopedAssignment{
+		{Subject: "bob", Role: "tenant_viewer", ScopeType: "tenant", ScopeID: "wildberries:b"},
+		{Subject: "alice", Role: "tenant_admin", ScopeType: "tenant", ScopeID: "wildberries:a"},
+		{Subject: "carol", Role: "tenant_admin", ScopeType: "tenant", ScopeID: "wildberries:c"},
+		{Subject: "dave", Role: "tenant_admin", ScopeType: "platform", ScopeID: "wildberries:a"},
+	} {
+		if err := s.AssignRole(ctx, a.Subject, a.Role, a.ScopeType, a.ScopeID); err != nil {
+			t.Fatalf("AssignRole %v: %v", a, err)
+		}
+	}
+
+	got, err := s.ListAssignmentsForScopes(ctx, "tenant", []string{"wildberries:b", "wildberries:a", "wildberries:missing"})
+	if err != nil {
+		t.Fatalf("ListAssignmentsForScopes: %v", err)
+	}
+	want := []store.ScopedAssignment{
+		{Subject: "alice", Role: "tenant_admin", ScopeType: "tenant", ScopeID: "wildberries:a"},
+		{Subject: "bob", Role: "tenant_viewer", ScopeType: "tenant", ScopeID: "wildberries:b"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+
+	empty, err := s.ListAssignmentsForScopes(ctx, "tenant", nil)
+	if err != nil || empty != nil {
+		t.Fatalf("empty scope list = %+v, %v; want nil, nil", empty, err)
+	}
+}
