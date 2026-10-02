@@ -16,6 +16,11 @@
 - Requests read `gatewayctx` identity only after the router or trusted middleware has established the boundary.
 
 ## Critical Flows
+- Built-in admin grants are validated once at the engine assignment boundary:
+  `tenant_admin` requires tenant scope with a literal `marketplace:account` ID;
+  `platform_admin` requires platform scope with an empty ID. HTTP, gRPC, service,
+  and bootstrap grants use this boundary. Config grants are validated before
+  policy sync. Existing legacy scope assignments remain exact and revocable.
 - `CheckAccess` hot path for runtime authorization.
 - Policy sync from config into the store at startup and during reload.
 - Bootstrap assignments for initial platform and tenant access.

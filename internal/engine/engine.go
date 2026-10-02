@@ -225,6 +225,9 @@ func (e *Engine) ListRoleClosure(ctx context.Context, roles []string) (map[strin
 
 // AssignRole delegates to the store.
 func (e *Engine) AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
+	if err := ValidateRoleAssignment(role, scopeType, scopeID); err != nil {
+		return err
+	}
 	return e.store.AssignRole(ctx, subject, role, scopeType, scopeID)
 }
 

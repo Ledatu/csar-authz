@@ -72,6 +72,9 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.AssignRole(r.Context(), targetSubject, body.Role, "tenant", tenantID); err != nil {
+		if writeInvalidAssignment(w, err) {
+			return
+		}
 		h.logger.Error("svc assign role failed", "target", targetSubject, "role", body.Role, "error", err)
 		apierror.New("internal_error", http.StatusInternalServerError, "failed to assign role").Write(w)
 		return

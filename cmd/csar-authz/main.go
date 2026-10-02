@@ -149,7 +149,7 @@ func runBootstrap(sf *configload.SourceFlags, overrides cliOverrides, subject st
 	}
 
 	const roleName = "platform_admin"
-	if err := sr.store.AssignRole(ctx, subject, roleName, "platform", ""); err != nil {
+	if err := engine.New(sr.store).AssignRole(ctx, subject, roleName, "platform", ""); err != nil {
 		return fmt.Errorf("assigning %s to %q: %w", roleName, subject, err)
 	}
 
@@ -457,6 +457,9 @@ func run(
 // syncPolicy converts config roles and permissions into store types and
 // calls SyncPolicy. Assignments are runtime-managed and not touched here.
 func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
+	if err := config.ValidateAdminAssignments(cfg); err != nil {
+		return err
+	}
 	var roles []*store.Role
 	var perms []*store.Permission
 
@@ -482,8 +485,12 @@ func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *
 // assignments declared in config exist in the store. AssignRole uses
 // ON CONFLICT DO NOTHING, so this is safe to run on every startup.
 func applyBootstrapAssignments(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
+	if err := config.ValidateAdminAssignments(cfg); err != nil {
+		return err
+	}
+	eng := engine.New(s)
 	for _, ba := range cfg.BootstrapAssignments {
-		if err := s.AssignRole(ctx, ba.Subject, ba.Role, ba.ScopeType, ba.ScopeID); err != nil {
+		if err := eng.AssignRole(ctx, ba.Subject, ba.Role, ba.ScopeType, ba.ScopeID); err != nil {
 			return fmt.Errorf("assigning %q → %q (scope %s/%s): %w", ba.Subject, ba.Role, ba.ScopeType, ba.ScopeID, err)
 		}
 		logger.Info("bootstrap assignment ensured",
