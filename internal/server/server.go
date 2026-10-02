@@ -172,6 +172,9 @@ func (s *Server) AssignRole(ctx context.Context, req *pb.AssignRoleRequest) (*pb
 	}
 
 	if err := s.engine.AssignRole(ctx, req.Subject, req.Role, req.ScopeType, req.ScopeId); err != nil {
+		if errors.Is(err, engine.ErrInvalidAssignment) {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "role %q not found", req.Role)
 		}

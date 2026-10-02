@@ -56,7 +56,7 @@ func TestSvcAssignRole_AuditFailureStill204(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 
-	r := reqSvcAssignRole("tenant-1", "user-1", "tenant_admin")
+	r := reqSvcAssignRole("wildberries:tenant-1", "user-1", "tenant_admin")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
 
@@ -72,7 +72,7 @@ func TestSvcAssignRole_AssignFailureReturns500(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterServiceRoutes(mux)
 
-	r := reqSvcAssignRole("tenant-1", "user-1", "tenant_admin")
+	r := reqSvcAssignRole("wildberries:tenant-1", "user-1", "tenant_admin")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, r)
 
@@ -157,11 +157,11 @@ func TestSvcAssignRole_EmptyAllowlistDeniesEverything(t *testing.T) {
 	_, mux, s := newSvcHandler(t)
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, reqSvcAssignRole("tenant-1", "user-1", "tenant_admin"))
+	mux.ServeHTTP(w, reqSvcAssignRole("wildberries:tenant-1", "user-1", "tenant_admin"))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 with empty allowlist", w.Code)
 	}
-	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "wildberries:tenant-1")
 	must(t, err)
 	if len(roles) != 0 {
 		t.Fatalf("assignment created despite empty allowlist: %v", roles)
@@ -172,11 +172,11 @@ func TestSvcAssignRole_AllowlistedRoleSucceeds(t *testing.T) {
 	_, mux, s := newSvcHandler(t, "tenant_admin")
 
 	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, reqSvcAssignRole("tenant-1", "user-1", "tenant_admin"))
+	mux.ServeHTTP(w, reqSvcAssignRole("wildberries:tenant-1", "user-1", "tenant_admin"))
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (body %s)", w.Code, w.Body.String())
 	}
-	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "tenant-1")
+	roles, err := s.GetSubjectRoles(context.Background(), "user-1", "tenant", "wildberries:tenant-1")
 	must(t, err)
 	if len(roles) != 1 || roles[0] != "tenant_admin" {
 		t.Fatalf("roles = %v, want [tenant_admin]", roles)

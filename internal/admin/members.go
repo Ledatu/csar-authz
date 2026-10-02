@@ -3,9 +3,11 @@ package admin
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 
+	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-authz/internal/store"
 	"github.com/ledatu/csar-core/apierror"
 )
@@ -119,6 +121,9 @@ func (h *Handler) handleAssignRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.AssignRole(r.Context(), targetSubject, body.Role, "tenant", tenantID); err != nil {
+		if writeInvalidAssignment(w, err) {
+			return
+		}
 		h.logger.Error("failed to assign role", "target", targetSubject, "role", body.Role, "error", err)
 		apierror.New("internal_error", http.StatusInternalServerError, "failed to assign role").Write(w)
 		return
@@ -165,6 +170,9 @@ func (h *Handler) handleAssignPlatformRole(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.engine.AssignRole(r.Context(), targetSubject, body.Role, "platform", ""); err != nil {
+		if writeInvalidAssignment(w, err) {
+			return
+		}
 		h.logger.Error("failed to assign platform role", "target", targetSubject, "role", body.Role, "error", err)
 		apierror.New("internal_error", http.StatusInternalServerError, "failed to assign role").Write(w)
 		return
@@ -176,6 +184,14 @@ func (h *Handler) handleAssignPlatformRole(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeInvalidAssignment(w http.ResponseWriter, err error) bool {
+	if !errors.Is(err, engine.ErrInvalidAssignment) {
+		return false
+	}
+	apierror.New("bad_request", http.StatusBadRequest, err.Error()).Write(w)
+	return true
 }
 
 func (h *Handler) handleRevokeRole(w http.ResponseWriter, r *http.Request) {
