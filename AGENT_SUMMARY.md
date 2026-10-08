@@ -61,3 +61,20 @@
 - `go build ./...`
 - `go test ./... -count=1`
 - `golangci-lint run ./...`
+
+## Transactional audit coverage (activation pending, October 8)
+- Startup-only `audit_outbox_enabled` defaults to false and requires PostgreSQL
+  plus configured router transport. It covers role create/delete, assignment
+  grant/revoke, permission add/remove, subject reassignment and policy sync/
+  replacement on both HTTP and gRPC paths. Memory-store behavior is unchanged.
+- Each covered mutation and its core outbox event share one transaction; enqueue
+  failure rolls back the business change. Relays retain identical events until
+  confirmed acceptance. Startup/bootstrap actions have explicit system actors;
+  normal events derive trusted gateway or verified gRPC identity.
+- Policy sync/replacement events record item counts, not the complete policy or
+  a reconstructable before/after diff. Idempotent grant/revoke attempts are
+  recorded as successful attempts. Do not interpret them as proof of a row change.
+- Duplicate HTTP async events are suppressed only for known covered actions in
+  outbox mode. Relay startup is independent of admin HTTP enablement.
+- See `internal/store/postgres/audit.go`, guarded `audit_integration_test.go`,
+  `cmd/csar-authz/main.go` and README. Production activation is still pending.

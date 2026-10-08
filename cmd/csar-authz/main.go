@@ -122,6 +122,12 @@ func createStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (
 			pgStore.Close()
 			return nil, fmt.Errorf("running migrations: %w", err)
 		}
+		if cfg.AuditOutboxEnabled {
+			if _, err := pgStore.EnableAuditOutbox(ctx); err != nil {
+				pgStore.Close()
+				return nil, fmt.Errorf("initializing audit outbox: %w", err)
+			}
+		}
 		return &storeResult{store: pgStore, pgStore: pgStore, cleanup: pgStore.Close}, nil
 	default:
 		return &storeResult{store: memory.New(), cleanup: func() {}}, nil
@@ -132,6 +138,7 @@ func createStore(ctx context.Context, cfg *config.Config, logger *slog.Logger) (
 func runBootstrap(sf *configload.SourceFlags, overrides cliOverrides, subject string, logger *slog.Logger) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = gatewayctx.NewContext(ctx, &gatewayctx.Identity{Subject: "system:csar-authz-bootstrap"})
 
 	cfg, err := loadConfig(ctx, sf, overrides, logger)
 	if err != nil {
@@ -207,6 +214,32 @@ func run(
 	defer sr.cleanup()
 	storeImpl := sr.store
 	pgStore := sr.pgStore
+
+	var (
+		auditClient   *audit.Client
+		auditRecorder audit.Recorder
+	)
+	if cfg.Audit.IsConfigured() {
+		auditClient, err = audit.NewRouterClient(&cfg.Audit, logger.With("component", "audit"))
+		if err != nil {
+			return fmt.Errorf("initializing audit client: %w", err)
+		}
+		auditRecorder = audit.NewClientRecorder(auditClient, "csar-authz")
+		defer func() { _ = auditClient.Close() }()
+		logger.Info("central audit client initialized", "base_url", cfg.Audit.RouterBaseURL)
+	}
+
+	if cfg.AuditOutboxEnabled {
+		outbox, err := audit.NewPGOutbox(pgStore.Pool(), "csar-authz")
+		if err != nil {
+			return err
+		}
+		stopRelay, err := outbox.StartRouterRelay(ctx, &cfg.Audit, logger.With("component", "audit-outbox"), reg)
+		if err != nil {
+			return err
+		}
+		defer stopRelay()
+	}
 
 	// Sync policy from config into the store.
 	if err := syncPolicy(ctx, storeImpl, cfg, logger); err != nil {
@@ -322,20 +355,6 @@ func run(
 				"the admin API uses mTLS to verify that requests originate from a trusted gateway")
 		}
 
-		var (
-			auditClient   *audit.Client
-			auditRecorder audit.Recorder
-		)
-		if cfg.Audit.IsConfigured() {
-			auditClient, err = audit.NewRouterClient(&cfg.Audit, logger.With("component", "audit"))
-			if err != nil {
-				return fmt.Errorf("initializing audit client: %w", err)
-			}
-			auditRecorder = audit.NewClientRecorder(auditClient, "csar-authz")
-			defer func() { _ = auditClient.Close() }()
-			logger.Info("central audit client initialized", "base_url", cfg.Audit.RouterBaseURL)
-		}
-
 		if len(cfg.Admin.ServiceAssignableRoles) == 0 {
 			logger.Warn("admin.service_assignable_roles is empty: every /svc role assign/revoke will be rejected")
 		}
@@ -343,6 +362,7 @@ func run(
 			logger.Warn("admin.allowed_client_cn is unset: any client certificate signed by the CA can use the admin API")
 		}
 		adminHandler = admin.New(eng, auditRecorder, nil, logger.With("component", "admin"), &cfg.Admin)
+		adminHandler.SetTransactionalAudit(cfg.AuditOutboxEnabled)
 
 		adminMux := http.NewServeMux()
 		adminHandler.RegisterRoutes(adminMux)
@@ -457,6 +477,7 @@ func run(
 // syncPolicy converts config roles and permissions into store types and
 // calls SyncPolicy. Assignments are runtime-managed and not touched here.
 func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
+	ctx = gatewayctx.NewContext(ctx, &gatewayctx.Identity{Subject: "system:csar-authz"})
 	if err := config.ValidateAdminAssignments(cfg); err != nil {
 		return err
 	}
@@ -485,6 +506,7 @@ func syncPolicy(ctx context.Context, s store.Store, cfg *config.Config, logger *
 // assignments declared in config exist in the store. AssignRole uses
 // ON CONFLICT DO NOTHING, so this is safe to run on every startup.
 func applyBootstrapAssignments(ctx context.Context, s store.Store, cfg *config.Config, logger *slog.Logger) error {
+	ctx = gatewayctx.NewContext(ctx, &gatewayctx.Identity{Subject: "system:csar-authz"})
 	if err := config.ValidateAdminAssignments(cfg); err != nil {
 		return err
 	}

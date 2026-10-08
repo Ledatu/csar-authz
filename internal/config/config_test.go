@@ -281,3 +281,12 @@ admin:
 		t.Fatalf("service_assignable_roles = %v", cfg.Admin.ServiceAssignableRoles)
 	}
 }
+
+func TestOutboxRequiresPostgresAndConfiguredTransport(t *testing.T) {
+	if _, err := LoadFromBytes([]byte("audit_outbox_enabled: true")); err == nil {
+		t.Fatal("memory outbox enabled")
+	}
+	if _, err := LoadFromBytes([]byte("audit_outbox_enabled: true\nstore:\n  backend: postgres\n  dsn: postgres://test")); err == nil {
+		t.Fatal("outbox enabled without receipt transport")
+	}
+}

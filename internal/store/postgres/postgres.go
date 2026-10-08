@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ledatu/csar-authz/internal/store"
+	"github.com/ledatu/csar-core/audit"
 	"github.com/ledatu/csar-core/pgutil"
 )
 
@@ -20,6 +21,7 @@ import (
 type Store struct {
 	pool   *pgxpool.Pool
 	logger *slog.Logger
+	outbox *audit.PGOutbox
 }
 
 // Option configures the PostgreSQL store.
@@ -66,10 +68,10 @@ func (s *Store) Pool() *pgxpool.Pool {
 // --- Roles ---
 
 func (s *Store) CreateRole(ctx context.Context, role *store.Role) error {
-	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if role.CreatedAt.IsZero() {
-			role.CreatedAt = time.Now()
-		}
+	if role.CreatedAt.IsZero() {
+		role.CreatedAt = time.Now()
+	}
+	return s.withAuditTx(ctx, mutationEvent(ctx, "role.create", "role", role.Name, "platform", "", role), func(tx pgx.Tx) error {
 
 		_, err := tx.Exec(ctx,
 			`INSERT INTO roles (name, description, created_at) VALUES ($1, $2, $3)`,
@@ -118,7 +120,7 @@ func (s *Store) GetRole(ctx context.Context, name string) (*store.Role, error) {
 }
 
 func (s *Store) DeleteRole(ctx context.Context, name string) error {
-	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+	return s.withAuditTx(ctx, mutationEvent(ctx, "role.delete", "role", name, "platform", "", nil), func(tx pgx.Tx) error {
 		_, err := tx.Exec(ctx,
 			`DELETE FROM role_parents WHERE parent_name = $1`, name,
 		)
@@ -239,34 +241,40 @@ func (s *Store) ListRoleClosure(ctx context.Context, roles []string) (map[string
 // --- Subject-Role Assignments ---
 
 func (s *Store) AssignRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
-	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO assignments (subject, role, scope_type, scope_id)
+	return s.withAuditTx(ctx, mutationEvent(ctx, "role.assign", "assignment", subject+"/"+role, scopeType, scopeID, nil), func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO assignments (subject, role, scope_type, scope_id)
 		 SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM roles WHERE name = $2)
 		 ON CONFLICT DO NOTHING`,
-		subject, role, scopeType, scopeID,
-	)
-	if err != nil {
-		return fmt.Errorf("assigning role: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		var roleExists bool
-		_ = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM roles WHERE name = $1)`, role).Scan(&roleExists)
-		if !roleExists {
-			return fmt.Errorf("role %q: %w", role, store.ErrNotFound)
+			subject, role, scopeType, scopeID,
+		)
+		if err != nil {
+			return fmt.Errorf("assigning role: %w", err)
 		}
-	}
-	return nil
+		if tag.RowsAffected() == 0 {
+			var roleExists bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM roles WHERE name = $1)`, role).Scan(&roleExists); err != nil {
+				return err
+			}
+			if !roleExists {
+				return fmt.Errorf("role %q: %w", role, store.ErrNotFound)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) RevokeRole(ctx context.Context, subject, role, scopeType, scopeID string) error {
-	_, err := s.pool.Exec(ctx,
-		`DELETE FROM assignments WHERE subject = $1 AND role = $2 AND scope_type = $3 AND scope_id = $4`,
-		subject, role, scopeType, scopeID,
-	)
-	if err != nil {
-		return fmt.Errorf("revoking role: %w", err)
-	}
-	return nil
+	return s.withAuditTx(ctx, mutationEvent(ctx, "role.revoke", "assignment", subject+"/"+role, scopeType, scopeID, nil), func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`DELETE FROM assignments WHERE subject = $1 AND role = $2 AND scope_type = $3 AND scope_id = $4`,
+			subject, role, scopeType, scopeID,
+		)
+		if err != nil {
+			return fmt.Errorf("revoking role: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetSubjectRoles(ctx context.Context, subject, scopeType, scopeID string) ([]string, error) {
@@ -402,7 +410,7 @@ func (s *Store) ListTenants(ctx context.Context) ([]string, error) {
 
 func (s *Store) ReassignSubject(ctx context.Context, source, target string) (int, error) {
 	var reassigned int
-	err := pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+	err := s.withAuditTx(ctx, mutationEvent(ctx, "subject.reassign", "subject", source, "platform", "", map[string]string{"source": source, "target": target}), func(tx pgx.Tx) error {
 		// Copy source assignments to target (dedup via ON CONFLICT DO NOTHING).
 		tag, err := tx.Exec(ctx,
 			`INSERT INTO assignments (subject, role, scope_type, scope_id, assigned_at)
@@ -436,29 +444,33 @@ func (s *Store) AddPermission(ctx context.Context, perm *store.Permission) error
 		perm.ID = uuid.New().String()
 	}
 
-	tag, err := s.pool.Exec(ctx,
-		`INSERT INTO permissions (id, role, resource, action)
+	return s.withAuditTx(ctx, mutationEvent(ctx, "permission.add", "permission", perm.ID, "platform", "", perm), func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`INSERT INTO permissions (id, role, resource, action)
 		 SELECT $1, $2, $3, $4 WHERE EXISTS (SELECT 1 FROM roles WHERE name = $2)`,
-		perm.ID, perm.Role, perm.Resource, perm.Action,
-	)
-	if err != nil {
-		return fmt.Errorf("adding permission: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("role %q: %w", perm.Role, store.ErrNotFound)
-	}
-	return nil
+			perm.ID, perm.Role, perm.Resource, perm.Action,
+		)
+		if err != nil {
+			return fmt.Errorf("adding permission: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return fmt.Errorf("role %q: %w", perm.Role, store.ErrNotFound)
+		}
+		return nil
+	})
 }
 
 func (s *Store) RemovePermission(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM permissions WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("removing permission: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return s.withAuditTx(ctx, mutationEvent(ctx, "permission.remove", "permission", id, "platform", "", nil), func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM permissions WHERE id = $1`, id)
+		if err != nil {
+			return fmt.Errorf("removing permission: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return store.ErrNotFound
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetRolePermissions(ctx context.Context, role string) ([]*store.Permission, error) {
@@ -536,7 +548,7 @@ func (s *Store) ListPermissionsForRoles(ctx context.Context, roles []string) (ma
 // runtime assignments. Roles are upserted and obsolete roles are pruned;
 // ON DELETE CASCADE cleans up assignments only for removed roles.
 func (s *Store) SyncPolicy(ctx context.Context, roles []*store.Role, perms []*store.Permission) error {
-	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+	return s.withAuditTx(ctx, mutationEvent(ctx, "policy.sync", "policy", "config", "platform", "", map[string]int{"roles": len(roles), "permissions": len(perms)}), func(tx pgx.Tx) error {
 		// Phase 1: clear config-owned tables that do NOT cascade to assignments.
 		if _, err := tx.Exec(ctx, `DELETE FROM permissions`); err != nil {
 			return fmt.Errorf("clearing permissions: %w", err)
@@ -606,7 +618,7 @@ func (s *Store) SyncPolicy(ctx context.Context, roles []*store.Role, perms []*st
 }
 
 func (s *Store) Sync(ctx context.Context, roles []*store.Role, perms []*store.Permission, assignments []store.ScopedAssignment) error {
-	return pgutil.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+	return s.withAuditTx(ctx, mutationEvent(ctx, "policy.replace", "policy", "config", "platform", "", map[string]int{"roles": len(roles), "permissions": len(perms), "assignments": len(assignments)}), func(tx pgx.Tx) error {
 		for _, table := range []string{"assignments", "permissions", "role_parents", "roles"} {
 			if _, err := tx.Exec(ctx, fmt.Sprintf("DELETE FROM %s", table)); err != nil {
 				return fmt.Errorf("clearing %s: %w", table, err)
