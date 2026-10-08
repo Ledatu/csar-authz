@@ -145,3 +145,30 @@ proto/authz/v1/authz.proto        Service definition (11 RPCs)
 ```bash
 go test ./... -v
 ```
+
+## Transactional audit outbox (activation gated)
+
+`audit_outbox_enabled: false` is the default. Enabling requires PostgreSQL and a
+configured router-backed `audit` STS transport, and requires a restart. Deploy
+compatible core and confirmed-ingest audit images first. Mixed old ingest instances
+can acknowledge before durable acceptance; do not enable producers until all are upgraded.
+
+Business writes and outbox entries share one transaction. Failed enqueue rolls back
+the mutation. Relays use SKIP LOCKED, service-scoped claims and 60s fenced leases;
+a 30s send plus 5s finish fits that lease. A missing/lost receipt retains the original
+ID, timestamp and payload for retry. One bounded sender per replica owns its router
+transport. Network calls never hold the business transaction. Pending copies are
+removed only after confirmed acceptance. Already-issued tokens and business behavior
+retain their existing semantics. Outbox schema is created only when the mode is enabled.
+
+Metrics are audit_outbox_pending_events, audit_outbox_oldest_age_seconds and
+audit_outbox_scrape_success. Database-query errors omit backlog values and report
+scrape failure rather than a false zero. Configure alert delivery separately.
+
+Coverage: PostgreSQL role create/delete, assignment grant/revoke, permission
+add/remove, subject reassignment, policy sync/full replacement and bootstrap grants.
+HTTP attribution uses trusted gateway context; authenticated gRPC uses its verified
+subject. Config/bootstrap activity has an explicit system actor; otherwise the event
+is marked unattributed. Successful idempotent grant/revoke attempts are also audited.
+Post-commit duplicates are suppressed only for covered HTTP action names. The memory
+backend retains its existing best-effort behavior and cannot enable this mode.

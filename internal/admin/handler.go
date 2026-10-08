@@ -19,11 +19,12 @@ import (
 
 // Handler holds dependencies for admin HTTP endpoints.
 type Handler struct {
-	engine        *engine.Engine
-	auditRecorder audit.Recorder // nil when audit emission is not configured
-	auditStore    audit.Store    // nil when audit querying is not configured
-	logger        *slog.Logger
-	cfg           atomic.Pointer[authzconfig.AdminConfig]
+	transactionalAudit bool
+	engine             *engine.Engine
+	auditRecorder      audit.Recorder // nil when audit emission is not configured
+	auditStore         audit.Store    // nil when audit querying is not configured
+	logger             *slog.Logger
+	cfg                atomic.Pointer[authzconfig.AdminConfig]
 }
 
 // New creates a Handler with all dependencies.
@@ -95,10 +96,19 @@ func (h *Handler) requirePermission(r *http.Request, subject, permission, scopeT
 	return nil
 }
 
+// SetTransactionalAudit suppresses post-commit duplicates for the covered PostgreSQL store.
+func (h *Handler) SetTransactionalAudit(enabled bool) { h.transactionalAudit = enabled }
+
 // recordAudit writes an audit event. When admin.audit_required is true,
 // a write failure is returned to the caller so the mutation can be failed.
 // Otherwise the failure is logged and swallowed (best-effort).
 func (h *Handler) recordAudit(r *http.Request, actor, action, targetType, targetID, scopeType, scopeID string, afterState json.RawMessage) error {
+	if h.transactionalAudit {
+		switch action {
+		case "role.create", "role.delete", "role.assign", "role.revoke", "permission.add", "permission.remove":
+			return nil
+		}
+	}
 	if h.auditRecorder == nil {
 		return nil
 	}

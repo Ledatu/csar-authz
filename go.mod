@@ -5,8 +5,8 @@ go 1.25.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/ledatu/csar-core v0.1.39
-	github.com/ledatu/csar-proto v0.1.4
+	github.com/ledatu/csar-core v0.1.44
+	github.com/ledatu/csar-proto v0.1.5
 	google.golang.org/grpc v1.81.1
 )
 
