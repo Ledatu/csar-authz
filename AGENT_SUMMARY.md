@@ -61,3 +61,13 @@
 - `go build ./...`
 - `go test ./... -count=1`
 - `golangci-lint run ./...`
+
+## Buyers delegated dispatch check (source only)
+
+`POST /svc/buyers/dispatch-authority` is restricted to gateway subject
+`svc:aurumskynet-buyers` on the existing router/mTLS service surface. Canonical
+seller and user UUIDs select only `campaign_module / buyers.write` in the
+`wildberries:<seller>` tenant. The caller cannot choose permissions. Each call
+uses the current engine decision, has no application decision cache, and never
+returns role lists or changes assignments. Buyers calls through the proposed
+CSAR `/svc/authz/buyers/dispatch-authority` route. Deployment is separate.
