@@ -36,6 +36,7 @@ func (h *Handler) requireServiceAssignable(actor, tenantID, role string) *apierr
 }
 
 func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /svc/buyers/dispatch-authority", h.handleBuyersDispatchAuthority)
 	mux.HandleFunc("POST /svc/tenants/{tenantId}/members/{subject}/roles", h.handleSvcAssignRole)
 	mux.HandleFunc("DELETE /svc/tenants/{tenantId}/members/{subject}/roles/{role}", h.handleSvcRevokeRole)
 	mux.HandleFunc("GET /svc/subjects/{subject}/scopes", h.handleSvcListSubjectScopes)

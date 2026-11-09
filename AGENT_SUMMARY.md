@@ -78,3 +78,13 @@
   outbox mode. Relay startup is independent of admin HTTP enablement.
 - See `internal/store/postgres/audit.go`, guarded `audit_integration_test.go`,
   `cmd/csar-authz/main.go` and README. Production activation is still pending.
+
+## Buyers delegated dispatch check (source only)
+
+`POST /svc/buyers/dispatch-authority` is restricted to gateway subject
+`svc:aurumskynet-buyers` on the existing router/mTLS service surface. Canonical
+seller and user UUIDs select only `campaign_module / buyers.write` in the
+`wildberries:<seller>` tenant. The caller cannot choose permissions. Each call
+uses the current engine decision, has no application decision cache, and never
+returns role lists or changes assignments. Buyers calls through the proposed
+CSAR `/svc/authz/buyers/dispatch-authority` route. Deployment is separate.
