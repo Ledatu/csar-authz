@@ -7,7 +7,7 @@ toolchain go1.26.11
 require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/ledatu/csar-core v0.1.48-0.20261122223628-bd29c3d6c383
+	github.com/ledatu/csar-core v0.1.48-0.20261124100717-34bbe3cf7777
 	github.com/ledatu/csar-proto v0.1.6-0.20261122222626-66dbba1ea79b
 	google.golang.org/grpc v1.83.2
 )
