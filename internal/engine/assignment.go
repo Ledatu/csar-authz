@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/ledatu/csar-core/authntokens"
 )
 
 // ErrInvalidAssignment identifies an admin role assigned outside its scope.
@@ -19,30 +21,23 @@ func ValidateRoleAssignment(role, scopeType, scopeID string) error {
 			return fmt.Errorf("%w: platform_admin requires platform scope with an empty scope_id", ErrInvalidAssignment)
 		}
 	case "tenant_admin":
-		if scopeType != ScopeTenant || !validAccountScope(scopeID) {
-			return fmt.Errorf("%w: tenant_admin requires tenant scope with a literal marketplace:account scope_id", ErrInvalidAssignment)
+		if scopeType != ScopeTenant || !validTenantAdminScope(scopeID) {
+			return fmt.Errorf("%w: tenant_admin requires tenant scope with a bounded literal scope_id", ErrInvalidAssignment)
 		}
 	}
 	return nil
 }
 
-func validAccountScope(scopeID string) bool {
-	marketplace, account, ok := strings.Cut(scopeID, ":")
-	if !ok || marketplace == "" || account == "" {
+func validTenantAdminScope(scopeID string) bool {
+	if (authntokens.ScopeRef{Type: ScopeTenant, ID: scopeID}).Validate() != nil || strings.ContainsAny(scopeID, "/@") {
 		return false
 	}
-	for i, c := range marketplace {
-		if (c >= 'a' && c <= 'z') || (i > 0 && ((c >= '0' && c <= '9') || c == '_' || c == '-')) {
-			continue
+	// Protect the control plane from empty/ambiguous segments without assigning
+	// application meaning to their count or interpreting a marketplace account.
+	for _, segment := range strings.Split(scopeID, ":") {
+		if segment == "" || strings.ContainsAny(segment[:1], "._-") {
+			return false
 		}
-		return false
-	}
-	for i, c := range account {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-			(i > 0 && (c == '-' || c == '_' || c == '.')) {
-			continue
-		}
-		return false
 	}
 	return true
 }

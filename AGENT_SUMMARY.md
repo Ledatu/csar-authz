@@ -43,7 +43,8 @@ automatic MCP onboarding; it changes no route, feature flag or deployment.
 
 ## Critical Flows
 - Built-in admin grants are validated once at the engine assignment boundary:
-  `tenant_admin` requires tenant scope with a literal `marketplace:account` ID;
+  `tenant_admin` requires tenant scope with a bounded literal ID, without empty
+  colon-separated segments, wildcards, paths or control characters;
   `platform_admin` requires platform scope with an empty ID. HTTP, gRPC, service,
   and bootstrap grants use this boundary. Config grants are validated before
   policy sync. Existing legacy scope assignments remain exact and revocable.

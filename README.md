@@ -2,6 +2,13 @@
 
 ## Generic service decisions
 
+Reserved admin roles retain control-plane scope guards. `platform_admin` requires
+platform scope and an empty ID; `tenant_admin` requires a bounded literal tenant
+ID, such as `north-branch` or `workspace:north-branch`. Tenant IDs are opaque and
+case-sensitive, without marketplace or UUID parsing. Empty segments, wildcards,
+path separators, whitespace/control characters and IDs beyond 256 bytes are
+rejected. Existing assignments remain exact and revocable; none is rewritten.
+
 The optional `service_policies` configuration enables a bounded permission-only
 `POST /svc/decisions/check` operation on the admin mTLS listener. Activation
 requires an exact verified gateway CN, explicit service/STS identity and configured
