@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/ledatu/csar-authz/internal/store"
@@ -20,9 +21,14 @@ func TestAssignRole_AdminScopes(t *testing.T) {
 		{"ozon seller", "tenant_admin", "tenant", "ozon:123", true},
 		{"tenant in platform", "tenant_admin", "platform", "", false},
 		{"tenant without account", "tenant_admin", "tenant", "wildberries:", false},
-		{"tenant without marketplace", "tenant_admin", "tenant", "seller-1", false},
+		{"opaque non UUID tenant", "tenant_admin", "tenant", "north-branch", true},
 		{"tenant wildcard", "tenant_admin", "tenant", "wildberries:*", false},
-		{"tenant extra separator", "tenant_admin", "tenant", "wildberries:a:b", false},
+		{"opaque segmented tenant", "tenant_admin", "tenant", "organization:workspace:north", true},
+		{"empty segment", "tenant_admin", "tenant", "organization::north", false},
+		{"empty prefix", "tenant_admin", "tenant", ":north", false},
+		{"ambiguous segment", "tenant_admin", "tenant", "workspace:..", false},
+		{"bounded tenant", "tenant_admin", "tenant", strings.Repeat("n", 256), true},
+		{"oversized tenant", "tenant_admin", "tenant", strings.Repeat("n", 257), false},
 		{"tenant path", "tenant_admin", "tenant", "wildberries:a/b", false},
 		{"tenant spaces", "tenant_admin", "tenant", "wildberries:a b", false},
 		{"platform", "platform_admin", "platform", "", true},
@@ -51,6 +57,33 @@ func TestAssignRole_AdminScopes(t *testing.T) {
 				t.Fatalf("unexpected persisted grants: %v", grants)
 			}
 		})
+	}
+}
+
+func TestRevokeInvalidLegacyAdminScopeRemainsExact(t *testing.T) {
+	ctx := context.Background()
+	s := memory.New()
+	e := New(s)
+	if err := s.CreateRole(ctx, &store.Role{Name: "tenant_admin"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"legacy/../scope", "scope"} {
+		if err := s.AssignRole(ctx, "owner", "tenant_admin", ScopeTenant, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.AssignRole(ctx, "other", "tenant_admin", ScopeTenant, "legacy/../scope") == nil {
+		t.Fatal("new invalid grant accepted")
+	}
+	if err := e.RevokeRole(ctx, "owner", "tenant_admin", ScopeTenant, "legacy/../scope"); err != nil {
+		t.Fatal(err)
+	}
+	grants, err := s.ListSubjectAssignments(ctx, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || grants[0].ScopeID != "scope" {
+		t.Fatal("legacy revoke normalized or widened scope", grants)
 	}
 }
 

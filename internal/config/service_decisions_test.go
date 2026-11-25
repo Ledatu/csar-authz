@@ -34,3 +34,22 @@ func TestDecisionIngressAndReloadFailClosed(t *testing.T) {
 		t.Fatal("unchanged config rejected", err)
 	}
 }
+
+func TestBootstrapAcceptsGenericLiteralTenantAndPreservesGuards(t *testing.T) {
+	for _, id := range []string{"north-branch", "workspace:north-branch", "organization:workspace:north"} {
+		cfg := Config{BootstrapAssignments: []authzconfig.BootstrapAssignment{{Subject: "owner", Role: "tenant_admin", ScopeType: "tenant", ScopeID: id}}}
+		if err := ValidateAdminAssignments(&cfg); err != nil {
+			t.Fatal("generic tenant rejected", err)
+		}
+		cfg.BootstrapAssignments[0].Role = "platform_admin"
+		if ValidateAdminAssignments(&cfg) == nil {
+			t.Fatal("platform role allowed in tenant scope")
+		}
+	}
+	for _, id := range []string{"", "workspace:", "workspace:*", "workspace::north", "workspace:bad/id", strings.Repeat("x", 257)} {
+		cfg := Config{BootstrapAssignments: []authzconfig.BootstrapAssignment{{Subject: "owner", Role: "tenant_admin", ScopeType: "tenant", ScopeID: id}}}
+		if ValidateAdminAssignments(&cfg) == nil {
+			t.Fatal("invalid bootstrap scope accepted")
+		}
+	}
+}

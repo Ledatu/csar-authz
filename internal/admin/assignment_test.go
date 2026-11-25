@@ -18,7 +18,7 @@ func TestAssignRole_HTTPRejectsInvalidAdminScope(t *testing.T) {
 
 	requests := []*http.Request{
 		reqWithSubjectJSON("POST", "/admin/tenants/wildberries:seller/members/target/roles", "root", assignRoleRequest{Role: "platform_admin"}),
-		reqWithSubjectJSON("POST", "/admin/tenants/legacy-id/members/target/roles", "root", assignRoleRequest{Role: "tenant_admin"}),
+		reqWithSubjectJSON("POST", "/admin/tenants/workspace:/members/target/roles", "root", assignRoleRequest{Role: "tenant_admin"}),
 		reqSvcAssignRole("wildberries:seller", "target", "platform_admin"),
 		reqSvcAssignRole("wildberries:*", "target", "tenant_admin"),
 	}
@@ -44,6 +44,7 @@ func TestAssignRole_HTTPAcceptsTenantAdminAndLegacyRevocation(t *testing.T) {
 	must(t, env.store.AssignRole(ctx, "target", "tenant_admin", "tenant", "legacy-id"))
 	env.handler.SetConfig(&authzconfig.AdminConfig{ServiceAssignableRoles: []string{"tenant_admin"}})
 	for _, r := range []*http.Request{
+		reqWithSubjectJSON("POST", "/admin/tenants/north-branch/members/target/roles", "root", assignRoleRequest{Role: "tenant_admin"}),
 		reqWithSubjectJSON("POST", "/admin/tenants/wildberries:seller/members/target/roles", "root", assignRoleRequest{Role: "tenant_admin"}),
 		reqSvcAssignRole("ozon:123", "target", "tenant_admin"),
 		reqSvcRevokeRole("legacy-id", "target", "tenant_admin"),
