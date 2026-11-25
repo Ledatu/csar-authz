@@ -1,3 +1,21 @@
+## Generic service decision receiver (U03, source only)
+
+`POST /svc/decisions/check` is registered only for enabled, validated
+`service_policies`, on a pinned verified admin mTLS listener. The request selects
+a configured profile/audience and 1–100 distinct namespace/resource refs; fixed
+permission and scope mappings stay in configuration and the existing engine
+evaluates current authority. Verified gateway service/STS identity plus exact
+per-service decide/profile/subject-mode capability is mandatory. Request-bound
+owner attribution narrows the target, never substitutes for consent or data
+authority; explicit background checks support a durable actor. Results are fully
+correlated permissions, not access grants. Engine uncertainty, expiry/cancellation
+and invalid candidates release no partial results. No decision cache is added.
+The handler owns its startup policy; reload rejects service-policy or enabled
+ingress changes before syncing any policy. Existing Buyers and service role/list
+endpoints remain unchanged until their planned consumer migration/U10/U17.
+This pins the merged Core receiver prerequisite; no route, deployed config,
+credential, Redis, database schema or production behavior is activated.
+
 ## Uniform caller envelope compatibility — source only
 
 Pins merged Core34bbe3cf so verified caller/origin envelopes can carry bounded

@@ -1,5 +1,25 @@
 # csar-authz
 
+## Generic service decisions
+
+The optional `service_policies` configuration enables a bounded permission-only
+`POST /svc/decisions/check` operation on the admin mTLS listener. Activation
+requires an exact verified gateway CN, explicit service/STS identity and configured
+`decide` capability. The request carries `version: 1`, profile, exact audience,
+subject, explicit `request_bound` or `background` mode, and 1–100 unique
+`{namespace,id}` resources. Clients cannot choose permission resource/action or
+scope mapping. Results correlate each input with `allowed` and its successful
+scope; an uncertain batch fails as a whole. Request-bound original-owner
+attribution only constrains which subject may be checked; it grants neither owner
+consent nor data access. Credential validity, consent and owner lifecycle remain
+independent mandatory checks at their owning boundaries.
+
+Service capabilities and their enabled ingress are startup-only: reload rejects
+changes before policy sync. The existing engine remains the current permission
+authority. No generic list/write capability is enabled in this slice, and existing
+service/Buyers endpoints retain their compatibility behavior. No deployed route
+or configuration enables this receiver automatically.
+
 Standalone RBAC authorization gRPC service for the CSAR ecosystem.
 
 Evaluates access decisions by resolving a subject's roles (including inherited parent roles) and checking their permissions against the requested resource and action.

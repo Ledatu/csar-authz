@@ -5,9 +5,11 @@ package config
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-core/authzconfig"
+	"github.com/ledatu/csar-core/caller"
 )
 
 type (
@@ -26,14 +28,42 @@ type (
 
 // LoadFromBytes validates the shared schema and service-owned admin grants.
 func LoadFromBytes(data []byte) (*Config, error) {
-	cfg, err := authzconfig.LoadFromBytes(data)
+	cfg, err := authzconfig.LoadFromBytesWithServiceDecisions(data)
 	if err != nil {
 		return nil, err
 	}
 	if err := ValidateAdminAssignments(cfg); err != nil {
 		return nil, err
 	}
+	if err := ValidateDecisionIngress(cfg); err != nil {
+		return nil, err
+	}
 	return cfg, nil
+}
+
+// ValidateDecisionIngress prevents enabled decisions on an unpinned or plaintext
+// admin listener. The service still verifies the live client chain per request.
+func ValidateDecisionIngress(cfg *Config) error {
+	if cfg.ServicePolicies == nil || !cfg.ServicePolicies.Enabled {
+		return nil
+	}
+	if !cfg.Admin.Enabled || !cfg.Admin.TLS.IsEnabled() || cfg.Admin.TLS.ClientCAFile == "" || cfg.Admin.AllowedClientCN == "" || !caller.ValidReference(cfg.Admin.AllowedClientCN) {
+		return fmt.Errorf("service decisions require a pinned verified admin TLS listener")
+	}
+	return cfg.Admin.TLS.Validate()
+}
+
+// ValidateReload runs before policy sync or any config mutation. Service
+// capabilities and their trusted ingress are immutable until process restart.
+func ValidateReload(current, next *Config) error {
+	if !reflect.DeepEqual(current.ServicePolicies, next.ServicePolicies) {
+		return fmt.Errorf("service_policies changes require restart")
+	}
+	if current.ServicePolicies != nil && current.ServicePolicies.Enabled &&
+		(current.Admin.Enabled != next.Admin.Enabled || current.Admin.Addr != next.Admin.Addr || current.Admin.TLS != next.Admin.TLS || current.Admin.AllowedClientCN != next.Admin.AllowedClientCN) {
+		return fmt.Errorf("service decision ingress changes require restart")
+	}
+	return nil
 }
 
 // ValidateAdminAssignments checks all configured grants before any policy or
