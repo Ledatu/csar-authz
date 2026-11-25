@@ -366,6 +366,9 @@ func run(
 
 		adminMux := http.NewServeMux()
 		adminHandler.RegisterRoutes(adminMux)
+		if err := adminHandler.RegisterServiceDecisions(adminMux, cfg); err != nil {
+			return err
+		}
 		adminMux.Handle("GET /health", health.Handler(Version))
 		adminMux.Handle("GET /readiness", rc.Handler())
 
@@ -426,6 +429,9 @@ func run(
 		applyFn := func(_ context.Context, data []byte) (bool, error) {
 			newCfg, err := config.LoadFromBytes(data)
 			if err != nil {
+				return false, err
+			}
+			if err := config.ValidateReload(cfg, newCfg); err != nil {
 				return false, err
 			}
 			if err := syncPolicy(ctx, storeImpl, newCfg, logger); err != nil {
