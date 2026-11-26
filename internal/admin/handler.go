@@ -19,6 +19,7 @@ import (
 
 // Handler holds dependencies for admin HTTP endpoints.
 type Handler struct {
+	servicePolicies    *serviceDecisionHandler // immutable, registered before serving
 	transactionalAudit bool
 	engine             *engine.Engine
 	auditRecorder      audit.Recorder // nil when audit emission is not configured

@@ -1,3 +1,19 @@
+## Per-service list and role capabilities (U10, opt-in)
+
+The full receiver enforces enabled service policy on the existing role grant/
+revoke, subject scope list, tenant assignment list and bounded assignment query
+wire APIs. Verified gateway mTLS and classified STS caller, exact service and
+operation are mandatory; unknown combinations deny with no svc-prefix fallback.
+Subject listing requires explicit request-bound owner matching or background
+capability and filters results to configured scope mappings. Tenant IDs must map
+exactly to permitted profile bindings before engine access. Mutations intersect
+operation roles with both the immutable startup and current global service-role
+ceiling, preserving protected-role checks and transactional audit. Enabled routes
+have five-second operation contexts and no-store responses. Startup policy, peer/
+listener and role ceiling changes require restart. Disabled/omitted policies keep
+legacy compatibility until consumer migration/U17. Buyers' fixed compatibility
+operation remains for U11 migration; no deployed policy or route is activated.
+
 ## Generic service decision receiver (U03, source only)
 
 `POST /svc/decisions/check` is registered only for enabled, validated
@@ -11,8 +27,8 @@ authority; explicit background checks support a durable actor. Results are fully
 correlated permissions, not access grants. Engine uncertainty, expiry/cancellation
 and invalid candidates release no partial results. No decision cache is added.
 The handler owns its startup policy; reload rejects service-policy or enabled
-ingress changes before syncing any policy. Existing Buyers and service role/list
-endpoints remain unchanged until their planned consumer migration/U10/U17.
+ingress changes before syncing any policy. Buyers compatibility remains until consumer migration/U17; U10 above now
+constrains the existing service role/list endpoints when policies are enabled.
 This pins the merged Core receiver prerequisite; no route, deployed config,
 credential, Redis, database schema or production behavior is activated.
 

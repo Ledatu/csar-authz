@@ -22,9 +22,10 @@ type decisionEngine interface {
 }
 
 type serviceDecisionHandler struct {
-	engine    decisionEngine
-	policies  *authzconfig.ServicePolicyConfig
-	gatewayCN string
+	engine      decisionEngine
+	policies    *authzconfig.ServicePolicyConfig
+	gatewayCN   string
+	roleCeiling []string
 }
 
 // This HTTP contract conveys current permission only. Credential validity,
@@ -74,15 +75,16 @@ func (h *Handler) RegisterServiceDecisions(mux *http.ServeMux, cfg *config.Confi
 			op.Profiles, op.SubjectModes, op.Roles = slices.Clone(op.Profiles), slices.Clone(op.SubjectModes), slices.Clone(op.Roles)
 		}
 	}
-	d := &serviceDecisionHandler{engine: h.engine, policies: &policy, gatewayCN: cfg.Admin.AllowedClientCN}
+	d := &serviceDecisionHandler{engine: h.engine, policies: &policy, gatewayCN: cfg.Admin.AllowedClientCN, roleCeiling: slices.Clone(cfg.Admin.ServiceAssignableRoles)}
+	h.servicePolicies = d
 	mux.HandleFunc("POST /svc/decisions/check", d.check)
 	return nil
 }
 
 func (d *serviceDecisionHandler) check(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	id, ok := gatewayctx.FromContext(r.Context())
-	if !ok || !d.trustedGateway(r) || id.Caller == nil || id.Caller.ValidateBinding(id.Subject, id.CredentialID) != nil || id.Caller.CallerKind != caller.Service || id.Caller.CredentialKind != caller.STS || id.Caller.CallerID != id.Subject {
+	id, ok := d.verifiedService(r)
+	if !ok {
 		decisionError(w, 403, "verified service ingress required")
 		return
 	}
