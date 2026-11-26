@@ -1,3 +1,15 @@
+## Per-service capability enforcement
+
+With `service_policies.enabled: true`, the existing service role/list APIs require
+verified router mTLS, classified STS identity and the exact configured operation.
+Only configured profile scope mappings are visible/queryable; subject listings
+require an allowed request-bound or background mode. Grant/revoke roles intersect
+per-operation subsets and the global `admin.service_assignable_roles` ceiling.
+Assignment metadata grants no resource permission. Unsupported callers/operations
+fail closed. Omitted/disabled policies retain compatibility during migration.
+Policy, role ceiling and trusted ingress changes require restart. No deployed
+configuration, Redis or database schema changes are included.
+
 # csar-authz
 
 ## Generic service decisions

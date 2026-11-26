@@ -26,6 +26,11 @@ func TestDecisionIngressAndReloadFailClosed(t *testing.T) {
 		}
 	}
 	changed := base
+	changed.Admin.ServiceAssignableRoles = []string{"new-role"}
+	if ValidateReload(&base, &changed) == nil {
+		t.Fatal("service role ceiling changed on reload")
+	}
+	changed = base
 	changed.ServicePolicies = nil
 	if err := ValidateReload(&base, &changed); err == nil || !strings.Contains(err.Error(), "restart") {
 		t.Fatal("policy removal accepted on reload")

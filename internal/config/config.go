@@ -9,7 +9,6 @@ import (
 
 	"github.com/ledatu/csar-authz/internal/engine"
 	"github.com/ledatu/csar-core/authzconfig"
-	"github.com/ledatu/csar-core/caller"
 )
 
 type (
@@ -28,7 +27,7 @@ type (
 
 // LoadFromBytes validates the shared schema and service-owned admin grants.
 func LoadFromBytes(data []byte) (*Config, error) {
-	cfg, err := authzconfig.LoadFromBytesWithServiceDecisions(data)
+	cfg, err := authzconfig.LoadFromBytesWithServiceCapabilities(data)
 	if err != nil {
 		return nil, err
 	}
@@ -44,13 +43,7 @@ func LoadFromBytes(data []byte) (*Config, error) {
 // ValidateDecisionIngress prevents enabled decisions on an unpinned or plaintext
 // admin listener. The service still verifies the live client chain per request.
 func ValidateDecisionIngress(cfg *Config) error {
-	if cfg.ServicePolicies == nil || !cfg.ServicePolicies.Enabled {
-		return nil
-	}
-	if !cfg.Admin.Enabled || !cfg.Admin.TLS.IsEnabled() || cfg.Admin.TLS.ClientCAFile == "" || cfg.Admin.AllowedClientCN == "" || !caller.ValidReference(cfg.Admin.AllowedClientCN) {
-		return fmt.Errorf("service decisions require a pinned verified admin TLS listener")
-	}
-	return cfg.Admin.TLS.Validate()
+	return authzconfig.ValidateServicePolicyIngress(cfg)
 }
 
 // ValidateReload runs before policy sync or any config mutation. Service
@@ -60,7 +53,7 @@ func ValidateReload(current, next *Config) error {
 		return fmt.Errorf("service_policies changes require restart")
 	}
 	if current.ServicePolicies != nil && current.ServicePolicies.Enabled &&
-		(current.Admin.Enabled != next.Admin.Enabled || current.Admin.Addr != next.Admin.Addr || current.Admin.TLS != next.Admin.TLS || current.Admin.AllowedClientCN != next.Admin.AllowedClientCN) {
+		(current.Admin.Enabled != next.Admin.Enabled || current.Admin.Addr != next.Admin.Addr || current.Admin.TLS != next.Admin.TLS || current.Admin.AllowedClientCN != next.Admin.AllowedClientCN || !reflect.DeepEqual(current.Admin.ServiceAssignableRoles, next.Admin.ServiceAssignableRoles)) {
 		return fmt.Errorf("service decision ingress changes require restart")
 	}
 	return nil

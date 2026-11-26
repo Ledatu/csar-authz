@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -9,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ledatu/csar-core/apierror"
+	"github.com/ledatu/csar-core/httpx"
 )
 
 // extractServiceSubject returns the gateway subject if it is a trusted service identity.
@@ -37,11 +37,11 @@ func (h *Handler) requireServiceAssignable(actor, tenantID, role string) *apierr
 
 func (h *Handler) RegisterServiceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /svc/buyers/dispatch-authority", h.handleBuyersDispatchAuthority)
-	mux.HandleFunc("POST /svc/tenants/{tenantId}/members/{subject}/roles", h.handleSvcAssignRole)
-	mux.HandleFunc("DELETE /svc/tenants/{tenantId}/members/{subject}/roles/{role}", h.handleSvcRevokeRole)
-	mux.HandleFunc("GET /svc/subjects/{subject}/scopes", h.handleSvcListSubjectScopes)
-	mux.HandleFunc("GET /svc/tenants/{tenantId}/assignments", h.handleSvcListScopeAssignments)
-	mux.HandleFunc("POST /svc/assignments/query", h.handleSvcQueryAssignments)
+	mux.HandleFunc("POST /svc/tenants/{tenantId}/members/{subject}/roles", h.boundServiceOperation(h.handleSvcAssignRole))
+	mux.HandleFunc("DELETE /svc/tenants/{tenantId}/members/{subject}/roles/{role}", h.boundServiceOperation(h.handleSvcRevokeRole))
+	mux.HandleFunc("GET /svc/subjects/{subject}/scopes", h.boundServiceOperation(h.handleSvcListSubjectScopes))
+	mux.HandleFunc("GET /svc/tenants/{tenantId}/assignments", h.boundServiceOperation(h.handleSvcListScopeAssignments))
+	mux.HandleFunc("POST /svc/assignments/query", h.boundServiceOperation(h.handleSvcQueryAssignments))
 }
 
 type svcAssignRoleRequest struct {
@@ -49,7 +49,7 @@ type svcAssignRoleRequest struct {
 }
 
 func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
-	actor, apiErr := extractServiceSubject(r)
+	actor, apiErr := h.authorizeServiceOperation(r, "grant_role", r.PathValue("subject"), []string{r.PathValue("tenantId")}, "")
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -63,8 +63,13 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body svcAssignRoleRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Role == "" {
+	r.Body = http.MaxBytesReader(w, r.Body, 8192)
+	if err := httpx.ReadStrictJSON(r, &body); err != nil || body.Role == "" {
 		apierror.New("bad_request", http.StatusBadRequest, "request body must contain role").Write(w)
+		return
+	}
+	if _, apiErr := h.authorizeServiceOperation(r, "grant_role", targetSubject, []string{tenantID}, body.Role); apiErr != nil {
+		writeError(w, apiErr)
 		return
 	}
 	if apiErr := h.requireServiceAssignable(actor, tenantID, body.Role); apiErr != nil {
@@ -92,7 +97,7 @@ func (h *Handler) handleSvcAssignRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleSvcRevokeRole(w http.ResponseWriter, r *http.Request) {
-	actor, apiErr := extractServiceSubject(r)
+	actor, apiErr := h.authorizeServiceOperation(r, "revoke_role", r.PathValue("subject"), []string{r.PathValue("tenantId")}, r.PathValue("role"))
 	if apiErr != nil {
 		writeError(w, apiErr)
 		return
@@ -136,7 +141,7 @@ type scopeDTO struct {
 }
 
 func (h *Handler) handleSvcListSubjectScopes(w http.ResponseWriter, r *http.Request) {
-	if _, apiErr := extractServiceSubject(r); apiErr != nil {
+	if _, apiErr := h.authorizeServiceOperation(r, "list_subject_scopes", r.PathValue("subject"), nil, ""); apiErr != nil {
 		writeError(w, apiErr)
 		return
 	}
@@ -154,9 +159,15 @@ func (h *Handler) handleSvcListSubjectScopes(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if _, apiErr := h.authorizeServiceOperation(r, "list_subject_scopes", subject, nil, ""); apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
 	out := make([]scopeDTO, 0, len(scopes))
 	for _, s := range scopes {
-		out = append(out, scopeDTO{ScopeType: s.ScopeType, ScopeID: s.ScopeID})
+		if h.serviceScopeVisible(r, s.ScopeType, s.ScopeID) {
+			out = append(out, scopeDTO{ScopeType: s.ScopeType, ScopeID: s.ScopeID})
+		}
 	}
 	writeJSON(w, http.StatusOK, svcScopesResponse{Scopes: out})
 }
@@ -171,7 +182,7 @@ type assignmentDTO struct {
 }
 
 func (h *Handler) handleSvcListScopeAssignments(w http.ResponseWriter, r *http.Request) {
-	if _, apiErr := extractServiceSubject(r); apiErr != nil {
+	if _, apiErr := h.authorizeServiceOperation(r, "list_scope_assignments", "", []string{r.PathValue("tenantId")}, ""); apiErr != nil {
 		writeError(w, apiErr)
 		return
 	}
@@ -217,13 +228,14 @@ type svcAssignmentQueryResponse struct {
 }
 
 func (h *Handler) handleSvcQueryAssignments(w http.ResponseWriter, r *http.Request) {
-	if _, apiErr := extractServiceSubject(r); apiErr != nil {
+	if _, apiErr := h.authorizeServiceOperation(r, "query_assignments", "", nil, ""); apiErr != nil {
 		writeError(w, apiErr)
 		return
 	}
 
 	var req svcAssignmentQueryRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSvcAssignmentQueryBodyBytes)).Decode(&req); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSvcAssignmentQueryBodyBytes)
+	if err := httpx.ReadStrictJSON(r, &req); err != nil {
 		apierror.New("bad_request", http.StatusBadRequest, "request body must contain tenant_ids").Write(w)
 		return
 	}
@@ -237,6 +249,10 @@ func (h *Handler) handleSvcQueryAssignments(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if _, apiErr := h.authorizeServiceOperation(r, "query_assignments", "", req.TenantIDs, ""); apiErr != nil {
+		writeError(w, apiErr)
+		return
+	}
 	assignments, err := h.engine.ListAssignmentsForScopes(r.Context(), "tenant", req.TenantIDs)
 	if err != nil {
 		h.logger.Error("svc query assignments failed", "tenants", len(req.TenantIDs), "error", err)
